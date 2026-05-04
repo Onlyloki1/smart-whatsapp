@@ -1,0 +1,37 @@
+<%- include("partials/header", { title: "Dashboard - Smart WhatsApp" }) %>
+<%- include("partials/nav", { active: "dashboard" }) %>
+
+<main class="container">
+  <h1>Dashboard</h1>
+  <p class="muted">Hola <%= user.name || user.email %>.</p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Mis Números</h3>
+      <p class="big" id="cChips">—</p>
+      <a href="/instances" class="btn">Ver</a>
+    </div>
+    <div class="card">
+      <h3>Campañas activas</h3>
+      <p class="big" id="cCampaigns">—</p>
+      <a href="/campaigns" class="btn">Ver</a>
+    </div>
+    <div class="card">
+      <h3>Mensajes hoy</h3>
+      <p class="big" id="cToday">—</p>
+    </div>
+    <div class="card">
+      <h3>Inbox sin leer</h3>
+      <p class="big" id="cUnread">—</p>
+      <a href="/inbox" class="btn">Ver</a>
+    </div>
+  </div>
+</main>
+
+<script>
+  fetch("/api/instances").then(r => r.json()).then(rows => {
+    document.getElementById("cChips").textContent = rows.length + " / " + 5;
+  });
+  // TODO: agregar endpoints de stats
+</script>
+</body></html>

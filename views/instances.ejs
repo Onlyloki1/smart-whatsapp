@@ -1,0 +1,126 @@
+<%- include("partials/header", { title: "Mis Números - Smart WhatsApp" }) %>
+<%- include("partials/nav", { active: "instances" }) %>
+
+<main class="container">
+  <div class="row-between">
+    <h1>Mis Números</h1>
+    <button class="btn primary" onclick="openAdd()">+ Agregar Número</button>
+  </div>
+
+  <div id="list" class="grid"></div>
+</main>
+
+<!-- Modal QR -->
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <h2 id="modalTitle">Conectá tu WhatsApp</h2>
+    <p class="muted">1) Abrí WhatsApp en tu celu → Configuración → Dispositivos vinculados → Vincular dispositivo. 2) Escaneá este QR.</p>
+    <div id="qrBox" class="qr-box">Generando QR...</div>
+    <p class="muted small" id="modalStatus">Esperando escaneo...</p>
+    <button onclick="closeModal()">Cerrar</button>
+  </div>
+</div>
+
+<script>
+let pollTimer = null;
+let currentInstanceId = null;
+
+async function loadList() {
+  const rows = await fetch("/api/instances").then(r => r.json());
+  const list = document.getElementById("list");
+  if (!rows.length) {
+    list.innerHTML = '<p class="muted">No tenés números conectados todavía.</p>';
+    return;
+  }
+  list.innerHTML = rows.map(r => `
+    <div class="card">
+      <div class="row-between">
+        <h3>${escape(r.name)}</h3>
+        <span class="status ${r.status}">${r.status}</span>
+      </div>
+      <p class="muted small">${r.phone_number || "Sin escanear"}</p>
+      <p class="muted small">Hoy: ${r.daily_sent_count || 0} msj</p>
+      ${r.proxy_country ? `<p class="muted small">Proxy: ${r.proxy_country}</p>` : ""}
+      <div class="actions">
+        ${r.status !== "connected" ? `<button onclick="showQR(${r.id}, '${escape(r.name)}')">Escanear QR</button>` : ""}
+        <button onclick="logout(${r.id})">Logout</button>
+        <button class="danger" onclick="del(${r.id})">Eliminar</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function escape(s){ return String(s||"").replace(/[<>&"']/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"})[c]); }
+
+async function openAdd() {
+  const name = prompt("Apodo del chip (ej: 'Chip 1 - Argentina'):");
+  if (!name) return;
+  const r = await fetch("/api/instances", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name })
+  });
+  if (!r.ok) { alert((await r.json()).error); return; }
+  const j = await r.json();
+  currentInstanceId = j.instance.id;
+  showQRBase64(j.qr, name);
+  startPolling();
+  loadList();
+}
+
+async function showQR(id, name) {
+  currentInstanceId = id;
+  document.getElementById("modalTitle").textContent = "Conectá: " + name;
+  document.getElementById("qrBox").textContent = "Generando QR...";
+  document.getElementById("modal").classList.remove("hidden");
+  const r = await fetch(`/api/instances/${id}/qr`).then(r => r.json());
+  showQRBase64(r.qr, name);
+  startPolling();
+}
+
+function showQRBase64(qr, name) {
+  document.getElementById("modalTitle").textContent = "Conectá: " + (name || "");
+  const box = document.getElementById("qrBox");
+  if (qr && qr.startsWith("data:image")) {
+    box.innerHTML = `<img src="${qr}" alt="QR" />`;
+  } else if (qr) {
+    box.innerHTML = `<img src="data:image/png;base64,${qr}" alt="QR" />`;
+  } else {
+    box.textContent = "No se generó QR. Probá de nuevo.";
+  }
+  document.getElementById("modal").classList.remove("hidden");
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if (!currentInstanceId) return;
+    const r = await fetch(`/api/instances/${currentInstanceId}/state`).then(r => r.json());
+    const state = r.state?.instance?.state || r.state?.state;
+    document.getElementById("modalStatus").textContent = "Estado: " + (state || "desconocido");
+    if (state === "open") {
+      stopPolling();
+      closeModal();
+      loadList();
+    }
+  }, 3000);
+}
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+function closeModal() { stopPolling(); document.getElementById("modal").classList.add("hidden"); }
+
+async function logout(id) {
+  if (!confirm("¿Cerrar sesión de WhatsApp del chip?")) return;
+  await fetch(`/api/instances/${id}/logout`, { method: "POST" });
+  loadList();
+}
+
+async function del(id) {
+  if (!confirm("¿ELIMINAR el chip completamente? (perdés historia)")) return;
+  await fetch(`/api/instances/${id}`, { method: "DELETE" });
+  loadList();
+}
+
+loadList();
+</script>
+
+</body></html>

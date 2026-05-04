@@ -1,0 +1,47 @@
+<%- include("partials/header", { title: "Registrarse - Smart WhatsApp" }) %>
+
+<div class="auth-wrap">
+  <div class="auth-card">
+    <h1>Smart WhatsApp</h1>
+    <p class="muted">Crear cuenta</p>
+
+    <form id="registerForm">
+      <label>Nombre
+        <input type="text" name="name" />
+      </label>
+      <label>Email
+        <input type="email" name="email" required autofocus />
+      </label>
+      <label>Password (mín 8)
+        <input type="password" name="password" required minlength="8" />
+      </label>
+      <button type="submit">Crear cuenta</button>
+      <div class="err" id="err"></div>
+    </form>
+
+    <p class="footer">¿Ya tenés cuenta? <a href="/login">Login</a></p>
+  </div>
+</div>
+
+<script>
+  document.getElementById("registerForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = { name: fd.get("name"), email: fd.get("email"), password: fd.get("password") };
+    const errBox = document.getElementById("err");
+    errBox.textContent = "";
+    const r = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      location.href = "/dashboard";
+    } else {
+      const j = await r.json();
+      errBox.textContent = j.error || "Error";
+    }
+  });
+</script>
+
+</body></html>

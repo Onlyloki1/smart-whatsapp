@@ -1,0 +1,15 @@
+<nav class="topnav">
+  <div class="brand">
+    <a href="/dashboard">Smart WhatsApp</a>
+  </div>
+  <ul class="links">
+    <li><a href="/dashboard" class="<%= active === 'dashboard' ? 'on' : '' %>">Dashboard</a></li>
+    <li><a href="/instances" class="<%= active === 'instances' ? 'on' : '' %>">Mis Números</a></li>
+    <li><a href="/campaigns" class="<%= active === 'campaigns' ? 'on' : '' %>">Campañas</a></li>
+    <li><a href="/inbox" class="<%= active === 'inbox' ? 'on' : '' %>">Inbox</a></li>
+  </ul>
+  <div class="user">
+    <span><%= currentUser.email %></span>
+    <button onclick="fetch('/api/auth/logout',{method:'POST'}).then(()=>location.href='/login')">Logout</button>
+  </div>
+</nav>
