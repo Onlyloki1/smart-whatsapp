@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "node lib/migrate.js && node server.js",
+    "startCommand": "echo ====PORT=$PORT==== && node lib/migrate.js && echo ====MIGRATE_OK==== && node server.js 2>&1; ec=$?; echo ====SERVER_EXITED code=$ec====; exit $ec",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 60,
     "restartPolicyType": "ON_FAILURE",

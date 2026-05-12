@@ -1,3 +1,6 @@
+process.stdout.write("[BOOT] server.js entering require phase\n");
+process.on("uncaughtException", (e) => { process.stderr.write("[FATAL uncaught] " + e.stack + "\n"); process.exit(1); });
+process.on("unhandledRejection", (e) => { process.stderr.write("[FATAL rejection] " + (e?.stack || e) + "\n"); process.exit(1); });
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
