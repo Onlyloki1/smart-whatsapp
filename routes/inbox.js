@@ -140,4 +140,32 @@ router.post("/conversations/:id/release-takeover", async (req, res) => {
   res.json({ ok: true });
 });
 
+// ─── Borrar conversación + reset (para testing del bot) ────
+// Wipea: mensajes, conversación, fired markers (cooldown del autoresponder),
+// y cola pendiente. La próxima vez que el número escriba, el autoresponder
+// dispara como si fuera primer mensaje.
+router.delete("/conversations/:id", async (req, res) => {
+  const convo = await queryOne(
+    `SELECT id, instance_id, phone FROM conversations WHERE id = $1 AND user_id = $2`,
+    [req.params.id, req.user.id]
+  );
+  if (!convo) return res.status(404).json({ error: "No encontrada" });
+
+  await exec(
+    `DELETE FROM messages_log WHERE instance_id = $1 AND phone = $2`,
+    [convo.instance_id, convo.phone]
+  );
+  await exec(
+    `DELETE FROM auto_responder_fired WHERE instance_id = $1 AND phone = $2`,
+    [convo.instance_id, convo.phone]
+  );
+  await exec(
+    `DELETE FROM auto_responder_queue WHERE instance_id = $1 AND phone = $2`,
+    [convo.instance_id, convo.phone]
+  );
+  await exec(`DELETE FROM conversations WHERE id = $1`, [convo.id]);
+
+  res.json({ ok: true });
+});
+
 module.exports = router;

@@ -29,9 +29,12 @@
           <h3 id="convoName">—</h3>
           <p class="muted small"><span id="convoPhone"></span> · <span id="convoChip"></span></p>
         </div>
-        <div id="takeoverBox" class="takeover-box hidden">
-          <span class="badge-warn">🤖 Autoresponder desactivado para este chat</span>
-          <button onclick="releaseTakeover()">Reactivar bot</button>
+        <div class="convo-actions">
+          <div id="takeoverBox" class="takeover-box hidden">
+            <span class="badge-warn">🤖 Autoresponder desactivado para este chat</span>
+            <button onclick="releaseTakeover()">Reactivar bot</button>
+          </div>
+          <button class="danger" onclick="deleteChat()" title="Borra mensajes + resetea cooldown del autoresponder">🗑 Borrar chat</button>
         </div>
       </header>
       <div id="messages" class="messages"></div>
@@ -93,6 +96,7 @@
   display: flex; justify-content: space-between; align-items: center; gap: 16px;
 }
 .convo-head h3 { margin: 0; font-size: 16px; color: #fff; }
+.convo-actions { display: flex; align-items: center; gap: 12px; }
 .takeover-box {
   display: flex; align-items: center; gap: 10px;
 }
@@ -244,6 +248,17 @@ async function releaseTakeover() {
   if (!confirm("¿Reactivar el autoresponder en esta conversación?")) return;
   await fetch(`/api/inbox/conversations/${activeConvoId}/release-takeover`, { method: "POST" });
   openChat(activeConvoId);
+}
+
+async function deleteChat() {
+  if (!activeConvoId) return;
+  if (!confirm("¿Borrar TODO el chat? Esto elimina mensajes, conversación y resetea el cooldown del autoresponder (la próxima vez que te escriba se vuelve a disparar).")) return;
+  const r = await fetch(`/api/inbox/conversations/${activeConvoId}`, { method: "DELETE" });
+  if (!r.ok) { alert("Error: " + ((await r.json()).error || r.status)); return; }
+  activeConvoId = null;
+  document.getElementById("convoView").classList.add("hidden");
+  document.getElementById("convoEmpty").classList.remove("hidden");
+  loadChats();
 }
 
 document.getElementById("search").addEventListener("input", debounce(loadChats, 300));
