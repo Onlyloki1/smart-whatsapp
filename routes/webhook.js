@@ -1,13 +1,28 @@
 const express = require("express");
 const { query, queryOne, exec, logEvent } = require("../db");
-const autoresponder = require("../jobs/autoresponder");
+const evo = require("../lib/evolution");
 
 const router = express.Router();
 
-// Evolution API webhook — eventos de cada instancia
+// Debounce ANTES de disparar el autoresponder: si el lead manda 3 mensajes
+// seguidos, esperamos a que pase X segundos sin nuevos inbounds para disparar.
+// Eso simula humano que lee TODO antes de contestar.
+const DEBOUNCE_MIN_SEC = 15;
+const DEBOUNCE_MAX_SEC = 30;
+function debounceSeconds() {
+  return DEBOUNCE_MIN_SEC + Math.floor(Math.random() * (DEBOUNCE_MAX_SEC - DEBOUNCE_MIN_SEC + 1));
+}
+
+// Genera un nombre amigable para "agendar" el lead en la libreta del chip
+function genCustomName(pushName, phone) {
+  const last4 = (phone || "").slice(-4);
+  if (pushName && pushName.trim()) return `${pushName.trim().slice(0, 20)} (Lead ${last4})`;
+  const d = new Date();
+  return `Lead-${d.toISOString().slice(0,10)}-${last4}`;
+}
+
 router.post("/evolution/:evolutionInstance", async (req, res) => {
-  // Responder rápido para que Evolution no reintente
-  res.json({ ok: true });
+  res.json({ ok: true }); // responder rápido
 
   try {
     const { evolutionInstance } = req.params;
@@ -17,10 +32,7 @@ router.post("/evolution/:evolutionInstance", async (req, res) => {
       "SELECT * FROM instances WHERE evolution_instance = $1",
       [evolutionInstance]
     );
-    if (!inst) {
-      console.warn(`[WEBHOOK] Instancia desconocida: ${evolutionInstance}`);
-      return;
-    }
+    if (!inst) return console.warn(`[WEBHOOK] Instancia desconocida: ${evolutionInstance}`);
 
     await logEvent(inst.user_id, inst.id, `evo_${event}`, data || {});
 
@@ -40,18 +52,10 @@ router.post("/evolution/:evolutionInstance", async (req, res) => {
         }
         break;
       }
-
       case "messages.upsert":
-      case "MESSAGES_UPSERT": {
+      case "MESSAGES_UPSERT":
         await handleIncomingMessage(inst, data);
         break;
-      }
-
-      case "qrcode.updated":
-      case "QRCODE_UPDATED": {
-        // QR refresco (cliente puede pedir nuevo via /qr)
-        break;
-      }
     }
   } catch (err) {
     console.error("[WEBHOOK ERR]", err.message);
@@ -59,13 +63,11 @@ router.post("/evolution/:evolutionInstance", async (req, res) => {
 });
 
 async function handleIncomingMessage(inst, data) {
-  // Evolution puede mandar uno o un array
   const messages = Array.isArray(data) ? data : data?.messages ? data.messages : [data];
 
   for (const msg of messages) {
     if (!msg) continue;
 
-    // Filtrar grupos (warmup) — solo procesar DMs 1-a-1
     const remoteJid = msg.key?.remoteJid || "";
     if (remoteJid.endsWith("@g.us") || remoteJid.endsWith("@broadcast")) continue;
 
@@ -77,40 +79,35 @@ async function handleIncomingMessage(inst, data) {
       msg.message?.imageMessage?.caption ||
       msg.message?.videoMessage?.caption ||
       "";
-    const direction = fromMe ? "out" : "in";
     const evoMsgId = msg.key?.id || null;
     const contactName = msg.pushName || null;
 
-    // Estado previo de la conversación (antes de cualquier insert)
     const prevConvo = await queryOne(
-      `SELECT id, human_takeover FROM conversations WHERE instance_id = $1 AND phone = $2`,
+      `SELECT id, human_takeover, custom_name, autoresponder_pending_was_new
+       FROM conversations WHERE instance_id = $1 AND phone = $2`,
       [inst.id, phone]
     );
     const isNewConversation = !prevConvo;
 
-    // ─── Outbound (fromMe=true): puede ser nuestro sistema o un humano ───
-    if (direction === "out") {
-      // Si ya logueamos este evolution_msg_id, fue nuestro sender/autoresponder → ignorar duplicado
+    // ─── OUTBOUND fromMe=true ──────────────────────────────────────
+    if (fromMe) {
       const alreadyLogged = evoMsgId
         ? await queryOne(
             `SELECT id FROM messages_log WHERE instance_id = $1 AND evolution_msg_id = $2 LIMIT 1`,
             [inst.id, evoMsgId]
           )
         : null;
+      if (alreadyLogged) continue; // ya logueado por nuestro sistema
 
-      if (alreadyLogged) {
-        continue; // ya está en log, nada que hacer
-      }
-
-      // Es outbound NO loguead → vino del celu del humano → take over
+      // Outbound NO loguead = vino del celu del humano → takeover
       await exec(
         `INSERT INTO messages_log (user_id, instance_id, phone, direction, text, evolution_msg_id)
          VALUES ($1, $2, $3, 'out', $4, $5)`,
         [inst.user_id, inst.id, phone, text, evoMsgId]
       );
-
       await exec(
-        `INSERT INTO conversations (user_id, instance_id, phone, contact_name, last_msg_text, last_msg_at, last_direction, unread_count, human_takeover, human_takeover_at)
+        `INSERT INTO conversations
+           (user_id, instance_id, phone, contact_name, last_msg_text, last_msg_at, last_direction, unread_count, human_takeover, human_takeover_at)
          VALUES ($1, $2, $3, $4, $5, NOW(), 'out', 0, TRUE, NOW())
          ON CONFLICT (instance_id, phone) DO UPDATE SET
            contact_name = COALESCE(EXCLUDED.contact_name, conversations.contact_name),
@@ -121,26 +118,56 @@ async function handleIncomingMessage(inst, data) {
            human_takeover_at = COALESCE(conversations.human_takeover_at, NOW())`,
         [inst.user_id, inst.id, phone, contactName, text]
       );
+      // Tomar control humano = cancelar autoresponder pendiente de esta conversación
+      await exec(
+        `UPDATE conversations SET autoresponder_pending_at = NULL WHERE instance_id = $1 AND phone = $2`,
+        [inst.id, phone]
+      );
       continue;
     }
 
-    // ─── Inbound ───
+    // ─── INBOUND ──────────────────────────────────────────────────
     await exec(
       `INSERT INTO messages_log (user_id, instance_id, phone, direction, text, evolution_msg_id)
        VALUES ($1, $2, $3, 'in', $4, $5)`,
       [inst.user_id, inst.id, phone, text, evoMsgId]
     );
 
+    // Insert / update conversation + setear debounce + tracking del último inbound
+    // Si ya hay un debounce activo, lo EXTENDEMOS (sliding window) — preserva
+    // was_new del primer inbound del burst.
+    const debounceSec = debounceSeconds();
+    const customName = prevConvo?.custom_name || genCustomName(contactName, phone);
+
     await exec(
-      `INSERT INTO conversations (user_id, instance_id, phone, contact_name, last_msg_text, last_msg_at, last_direction, unread_count)
-       VALUES ($1, $2, $3, $4, $5, NOW(), 'in', 1)
+      `INSERT INTO conversations
+         (user_id, instance_id, phone, contact_name, custom_name,
+          last_msg_text, last_msg_at, last_direction, unread_count,
+          last_inbound_at, last_inbound_msg_id,
+          autoresponder_pending_at, autoresponder_pending_was_new)
+       VALUES ($1, $2, $3, $4, $5,
+               $6, NOW(), 'in', 1,
+               NOW(), $7,
+               NOW() + ($8 || ' seconds')::interval, $9)
        ON CONFLICT (instance_id, phone) DO UPDATE SET
          contact_name = COALESCE(EXCLUDED.contact_name, conversations.contact_name),
+         custom_name = COALESCE(conversations.custom_name, EXCLUDED.custom_name),
          last_msg_text = EXCLUDED.last_msg_text,
          last_msg_at = NOW(),
          last_direction = 'in',
-         unread_count = conversations.unread_count + 1`,
-      [inst.user_id, inst.id, phone, contactName, text]
+         unread_count = conversations.unread_count + 1,
+         last_inbound_at = NOW(),
+         last_inbound_msg_id = EXCLUDED.last_inbound_msg_id,
+         autoresponder_pending_at = CASE
+           WHEN conversations.human_takeover THEN NULL
+           ELSE NOW() + ($8 || ' seconds')::interval
+         END,
+         autoresponder_pending_was_new = COALESCE(conversations.autoresponder_pending_was_new, EXCLUDED.autoresponder_pending_was_new)`,
+      [
+        inst.user_id, inst.id, phone, contactName, customName,
+        text, evoMsgId,
+        debounceSec, isNewConversation,
+      ]
     );
 
     // Marcar lead como replied (para campañas outbound)
@@ -150,62 +177,13 @@ async function handleIncomingMessage(inst, data) {
       [inst.id, phone]
     );
 
-    // ─── Disparar autoresponder ───
-    await maybeFireAutoresponder({
-      inst,
-      phone,
-      text,
-      wasNewConversation: isNewConversation,
-      priorTakeover: !!prevConvo?.human_takeover,
-    });
-  }
-}
-
-async function maybeFireAutoresponder({ inst, phone, text, wasNewConversation, priorTakeover }) {
-  // Si un humano ya tomó la conversación, no disparar nunca más
-  if (priorTakeover) return;
-
-  // Buscar autoresponders aplicables al chip (específico) o globales (instance_id NULL)
-  const responders = await query(
-    `SELECT * FROM auto_responders
-     WHERE user_id = $1
-       AND enabled = TRUE
-       AND (instance_id IS NULL OR instance_id = $2)
-     ORDER BY (instance_id IS NOT NULL) DESC, id ASC`,
-    [inst.user_id, inst.id]
-  );
-
-  for (const ar of responders) {
-    // Filtrar por trigger
-    if (ar.trigger_type === "first_message" && !wasNewConversation) continue;
-    if (ar.trigger_type === "keyword") {
-      const kw = (ar.trigger_keyword || "").toLowerCase().trim();
-      if (!kw || !(text || "").toLowerCase().includes(kw)) continue;
+    // Best-effort: "agendar" el contacto en la libreta del chip (Evolution side)
+    // Solo lo hacemos UNA VEZ por conversación. No bloquea nada si falla.
+    if (!prevConvo) {
+      evo.updateContactName(inst.evolution_instance, phone, customName)
+        .then(() => exec(`UPDATE conversations SET contact_saved_at = NOW() WHERE instance_id = $1 AND phone = $2`, [inst.id, phone]))
+        .catch(() => {});
     }
-    // 'any' siempre dispara
-
-    // Cooldown: ¿este número ya recibió este autoresponder en las últimas N horas?
-    const cooldown = ar.cooldown_hours || 24;
-    const fired = await queryOne(
-      `SELECT fired_at FROM auto_responder_fired
-       WHERE auto_responder_id = $1 AND instance_id = $2 AND phone = $3`,
-      [ar.id, inst.id, phone]
-    );
-    if (fired && cooldown > 0) {
-      const hoursAgo = (Date.now() - new Date(fired.fired_at).getTime()) / 3600000;
-      if (hoursAgo < cooldown) continue;
-    }
-
-    // Encolar
-    const count = await autoresponder.enqueueAutoresponder(ar.id, inst.user_id, inst.id, phone);
-    await logEvent(inst.user_id, inst.id, "autoresponder_fired", {
-      auto_responder_id: ar.id,
-      phone,
-      steps: count,
-    });
-
-    // Solo dispara el PRIMER match (chip-specific gana sobre global gracias al ORDER BY)
-    break;
   }
 }
 

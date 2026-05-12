@@ -169,7 +169,7 @@ async function loadChats() {
   list.innerHTML = rows.map(r => `
     <div class="chat-item ${r.id == activeConvoId ? "active" : ""}" onclick="openChat(${r.id})">
       <div class="row">
-        <span class="name">${escape(r.contact_name || r.phone)}</span>
+        <span class="name">${escape(r.custom_name || r.contact_name || r.phone)}</span>
         <span class="time">${timeShort(r.last_msg_at)}</span>
       </div>
       <div class="row">
@@ -192,8 +192,8 @@ async function openChat(id) {
 
   const data = await fetch(`/api/inbox/conversations/${id}/messages`).then(r => r.json());
   const c = data.conversation;
-  document.getElementById("convoName").textContent = c.contact_name || c.phone;
-  document.getElementById("convoPhone").textContent = c.phone;
+  document.getElementById("convoName").textContent = c.custom_name || c.contact_name || c.phone;
+  document.getElementById("convoPhone").textContent = c.phone + (c.contact_name && c.custom_name ? ` · ${c.contact_name}` : "");
   document.getElementById("convoChip").textContent = c.instance_name + (c.instance_phone ? ` (${c.instance_phone})` : "");
 
   const tk = document.getElementById("takeoverBox");
