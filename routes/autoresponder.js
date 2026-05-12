@@ -5,6 +5,44 @@ const { authMiddleware } = require("../middleware/auth");
 const router = express.Router();
 router.use(authMiddleware);
 
+// Helper: normalizar variantes (string single → array)
+function normalizeVariants(input) {
+  if (Array.isArray(input)) return input.map(s => String(s || "").trim()).filter(Boolean);
+  if (typeof input === "string") {
+    return input.split("\n").map(s => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+async function insertSteps(arId, steps) {
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    const variants = normalizeVariants(s.text_variants ?? s.text);
+    const legacyText = variants[0] || null; // primer variant también va al campo text para legacy
+    await exec(
+      `INSERT INTO auto_responder_steps
+         (auto_responder_id, order_idx, step_type, text, text_variants,
+          media_url, mime_type, file_name,
+          delay_min_sec, delay_max_sec, show_typing, append_utm)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        arId,
+        i,
+        s.step_type || "text",
+        legacyText,
+        JSON.stringify(variants),
+        s.media_url || null,
+        s.mime_type || null,
+        s.file_name || null,
+        s.delay_min_sec ?? 8,
+        s.delay_max_sec ?? 25,
+        s.show_typing !== false,
+        s.append_utm !== false,
+      ]
+    );
+  }
+}
+
 // ─── List my autoresponders ────────────────────────────
 router.get("/", async (req, res) => {
   const rows = await query(
@@ -45,12 +83,16 @@ router.post("/", async (req, res) => {
     trigger_type = "first_message",
     trigger_keyword = null,
     cooldown_hours = 24,
+    quiet_hours_start = 9,
+    quiet_hours_end = 22,
+    timezone = "America/Argentina/Buenos_Aires",
+    min_gap_seconds_between_fires = 45,
+    skip_rate_pct = 0,
     steps = [],
   } = req.body || {};
 
   if (!name) return res.status(400).json({ error: "Nombre requerido" });
 
-  // Validar instance_id pertenece al user (si se pasó)
   if (instance_id) {
     const ok = await queryOne(`SELECT id FROM instances WHERE id = $1 AND user_id = $2`, [
       instance_id,
@@ -60,34 +102,18 @@ router.post("/", async (req, res) => {
   }
 
   const ar = await queryOne(
-    `INSERT INTO auto_responders (user_id, name, instance_id, enabled, trigger_type, trigger_keyword, cooldown_hours)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO auto_responders
+       (user_id, name, instance_id, enabled, trigger_type, trigger_keyword, cooldown_hours,
+        quiet_hours_start, quiet_hours_end, timezone, min_gap_seconds_between_fires, skip_rate_pct)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
-    [req.user.id, name, instance_id, !!enabled, trigger_type, trigger_keyword, cooldown_hours]
+    [
+      req.user.id, name, instance_id, !!enabled, trigger_type, trigger_keyword, cooldown_hours,
+      quiet_hours_start, quiet_hours_end, timezone, min_gap_seconds_between_fires, skip_rate_pct
+    ]
   );
 
-  // Insertar steps
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i];
-    await exec(
-      `INSERT INTO auto_responder_steps
-         (auto_responder_id, order_idx, step_type, text, media_url, mime_type, file_name, delay_min_sec, delay_max_sec, show_typing)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [
-        ar.id,
-        i,
-        s.step_type || "text",
-        s.text || null,
-        s.media_url || null,
-        s.mime_type || null,
-        s.file_name || null,
-        s.delay_min_sec ?? 8,
-        s.delay_max_sec ?? 25,
-        s.show_typing !== false,
-      ]
-    );
-  }
-
+  await insertSteps(ar.id, steps);
   res.json(ar);
 });
 
@@ -106,6 +132,11 @@ router.put("/:id", async (req, res) => {
     trigger_type = "first_message",
     trigger_keyword = null,
     cooldown_hours = 24,
+    quiet_hours_start = 9,
+    quiet_hours_end = 22,
+    timezone = "America/Argentina/Buenos_Aires",
+    min_gap_seconds_between_fires = 45,
+    skip_rate_pct = 0,
     steps = [],
   } = req.body || {};
 
@@ -121,33 +152,19 @@ router.put("/:id", async (req, res) => {
 
   await exec(
     `UPDATE auto_responders
-     SET name = $1, instance_id = $2, enabled = $3, trigger_type = $4, trigger_keyword = $5, cooldown_hours = $6
-     WHERE id = $7`,
-    [name, instance_id, !!enabled, trigger_type, trigger_keyword, cooldown_hours, ar.id]
+     SET name = $1, instance_id = $2, enabled = $3, trigger_type = $4, trigger_keyword = $5,
+         cooldown_hours = $6, quiet_hours_start = $7, quiet_hours_end = $8, timezone = $9,
+         min_gap_seconds_between_fires = $10, skip_rate_pct = $11
+     WHERE id = $12`,
+    [
+      name, instance_id, !!enabled, trigger_type, trigger_keyword,
+      cooldown_hours, quiet_hours_start, quiet_hours_end, timezone,
+      min_gap_seconds_between_fires, skip_rate_pct, ar.id
+    ]
   );
 
   await exec(`DELETE FROM auto_responder_steps WHERE auto_responder_id = $1`, [ar.id]);
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i];
-    await exec(
-      `INSERT INTO auto_responder_steps
-         (auto_responder_id, order_idx, step_type, text, media_url, mime_type, file_name, delay_min_sec, delay_max_sec, show_typing)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [
-        ar.id,
-        i,
-        s.step_type || "text",
-        s.text || null,
-        s.media_url || null,
-        s.mime_type || null,
-        s.file_name || null,
-        s.delay_min_sec ?? 8,
-        s.delay_max_sec ?? 25,
-        s.show_typing !== false,
-      ]
-    );
-  }
-
+  await insertSteps(ar.id, steps);
   res.json({ ok: true });
 });
 
@@ -186,7 +203,6 @@ router.post("/:id/test", async (req, res) => {
   ]);
   if (!ar) return res.status(404).json({ error: "No encontrado" });
 
-  // Determinar instance: el del autoresponder, o el del body, o el primero conectado del user
   let targetInstanceId = ar.instance_id || instance_id;
   if (!targetInstanceId) {
     const first = await queryOne(

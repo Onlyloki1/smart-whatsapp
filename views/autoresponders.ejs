@@ -62,6 +62,30 @@
         </label>
       </div>
 
+      <h3 style="margin-top:24px;">🛡 Anti-detección</h3>
+      <p class="muted small">Estas opciones protegen tus chips contra baneos por patrón de bot.</p>
+      <div class="form-grid">
+        <label>
+          <span>Hora de inicio (HH 0-23)</span>
+          <input id="f_quiet_start" type="number" min="0" max="23" value="9" />
+          <small class="muted">Antes de esto, encolar para mañana.</small>
+        </label>
+        <label>
+          <span>Hora de cierre (HH 0-23)</span>
+          <input id="f_quiet_end" type="number" min="0" max="23" value="22" />
+        </label>
+        <label>
+          <span>Gap mínimo entre envíos del mismo chip (seg)</span>
+          <input id="f_min_gap" type="number" min="0" value="45" />
+          <small class="muted">Si entran muchos leads juntos, los espacia.</small>
+        </label>
+        <label>
+          <span>Skip rate (%)</span>
+          <input id="f_skip_rate" type="number" min="0" max="100" value="0" />
+          <small class="muted">% de leads que NO respondemos (simula humano).</small>
+        </label>
+      </div>
+
       <h3 style="margin-top:24px;">Secuencia de mensajes</h3>
       <p class="muted small">Se mandan en orden. Cada uno tiene un delay random simulando que estás escribiendo.</p>
       <div id="steps"></div>
@@ -190,12 +214,31 @@ function newAR() {
   document.getElementById("f_keyword").value = "";
   document.getElementById("f_cooldown").value = 24;
   document.getElementById("f_enabled").checked = true;
+  document.getElementById("f_quiet_start").value = 9;
+  document.getElementById("f_quiet_end").value = 22;
+  document.getElementById("f_min_gap").value = 45;
+  document.getElementById("f_skip_rate").value = 0;
   document.getElementById("f_keyword_wrap").style.display = "none";
   document.getElementById("testBtn").style.display = "none";
   document.getElementById("editErr").textContent = "";
   stepsState = [
-    { step_type: "text", text: "¡Hola! Gracias por escribirme 🙌 Te paso un video corto que te va a interesar:", delay_min_sec: 8, delay_max_sec: 20, show_typing: true },
-    { step_type: "video", text: "", media_url: "", delay_min_sec: 15, delay_max_sec: 30, show_typing: true },
+    {
+      step_type: "text",
+      text_variants: [
+        "¡Hola! Gracias por escribirme 🙌",
+        "Hola che, vi que te interesó la info",
+        "Buenas! Te respondo enseguida",
+        "Hola, ¿cómo va? Gracias por contactarme",
+      ],
+      delay_min_sec: 12, delay_max_sec: 30,
+      show_typing: true, append_utm: true,
+    },
+    {
+      step_type: "text",
+      text_variants: ["Te dejo el link acá: https://tu-link.com"],
+      delay_min_sec: 25, delay_max_sec: 60,
+      show_typing: true, append_utm: true,
+    },
   ];
   renderSteps();
   document.getElementById("editor").classList.remove("hidden");
@@ -212,11 +255,16 @@ async function editAR(id) {
   document.getElementById("f_keyword").value = ar.trigger_keyword || "";
   document.getElementById("f_cooldown").value = ar.cooldown_hours;
   document.getElementById("f_enabled").checked = !!ar.enabled;
+  document.getElementById("f_quiet_start").value = ar.quiet_hours_start ?? 9;
+  document.getElementById("f_quiet_end").value = ar.quiet_hours_end ?? 22;
+  document.getElementById("f_min_gap").value = ar.min_gap_seconds_between_fires ?? 45;
+  document.getElementById("f_skip_rate").value = ar.skip_rate_pct ?? 0;
   document.getElementById("f_keyword_wrap").style.display =
     ar.trigger_type === "keyword" ? "flex" : "none";
   document.getElementById("testBtn").style.display = "inline-block";
   stepsState = (ar.steps || []).map(s => ({
     step_type: s.step_type,
+    text_variants: Array.isArray(s.text_variants) ? s.text_variants : (s.text ? [s.text] : []),
     text: s.text || "",
     media_url: s.media_url || "",
     mime_type: s.mime_type || "",
@@ -224,6 +272,7 @@ async function editAR(id) {
     delay_min_sec: s.delay_min_sec,
     delay_max_sec: s.delay_max_sec,
     show_typing: s.show_typing,
+    append_utm: s.append_utm !== false,
   }));
   renderSteps();
   document.getElementById("editor").classList.remove("hidden");
@@ -235,14 +284,15 @@ document.getElementById("f_trigger").addEventListener("change", e => {
 
 function addStep(type) {
   const defaults = {
-    text: { text: "", delay_min_sec: 10, delay_max_sec: 25 },
-    video: { text: "", media_url: "", delay_min_sec: 15, delay_max_sec: 30 },
-    image: { text: "", media_url: "", delay_min_sec: 8, delay_max_sec: 18 },
-    audio: { text: "", media_url: "", delay_min_sec: 6, delay_max_sec: 15 },
+    text: { text_variants: [""], delay_min_sec: 12, delay_max_sec: 30 },
+    video: { text_variants: [""], media_url: "", delay_min_sec: 25, delay_max_sec: 60 },
+    image: { text_variants: [""], media_url: "", delay_min_sec: 15, delay_max_sec: 35 },
+    audio: { text_variants: [""], media_url: "", delay_min_sec: 10, delay_max_sec: 25 },
   };
   stepsState.push({
     step_type: type,
     show_typing: true,
+    append_utm: true,
     ...defaults[type],
   });
   renderSteps();
@@ -267,12 +317,17 @@ function renderSteps() {
 
 function stepHtml(s, i) {
   const isMedia = s.step_type !== "text";
+  // text_variants puede ser array o (legacy) un solo string en s.text
+  let variants = Array.isArray(s.text_variants) ? s.text_variants : (s.text ? [s.text] : []);
+  const variantsText = variants.join("\n");
+  const variantCount = variants.filter(v => v && v.trim()).length;
   return `
     <div class="step" data-i="${i}">
       <div class="step-head">
         <span class="badge">${s.step_type}</span>
         <span class="idx">Paso ${i + 1}</span>
         <span class="grow"></span>
+        <span class="muted small" id="vcount-${i}">${variantCount} variante${variantCount === 1 ? "" : "s"}</span>
         <button onclick="moveStep(${i}, -1)">↑</button>
         <button onclick="moveStep(${i}, 1)">↓</button>
         <button class="danger" onclick="removeStep(${i})">Eliminar</button>
@@ -285,8 +340,9 @@ function stepHtml(s, i) {
           </label>
         ` : ""}
         <label class="full">
-          <span>${isMedia ? "Caption (opcional)" : "Texto del mensaje"}</span>
-          <textarea data-k="text">${escape(s.text || "")}</textarea>
+          <span>${isMedia ? "Caption (1 por línea = variante random)" : "Texto del mensaje (1 por línea = variante random)"}</span>
+          <textarea data-k="text_variants" rows="4" placeholder="Hola! Gracias por escribirme&#10;Buenas, te paso info&#10;Hola che, mirá esto">${escape(variantsText)}</textarea>
+          <small class="muted">Si ponés varias líneas, el bot elige una al azar cada vez. Anti-fingerprint.</small>
         </label>
         <label>
           <span>Delay min (seg)</span>
@@ -299,6 +355,10 @@ function stepHtml(s, i) {
         <label class="full" style="flex-direction:row;align-items:center;gap:8px;">
           <input data-k="show_typing" type="checkbox" ${s.show_typing ? "checked" : ""} />
           <span style="color:#aaa;font-size:13px;">Mostrar "escribiendo..." durante el delay</span>
+        </label>
+        <label class="full" style="flex-direction:row;align-items:center;gap:8px;">
+          <input data-k="append_utm" type="checkbox" ${s.append_utm !== false ? "checked" : ""} />
+          <span style="color:#aaa;font-size:13px;">Agregar tracking random a links (anti-fingerprint, no cambia destino)</span>
         </label>
       </div>
     </div>
@@ -313,6 +373,14 @@ function bindStep(i) {
       const k = el.dataset.k;
       let v = el.type === "checkbox" ? el.checked : el.value;
       if (k.includes("_sec")) v = parseInt(v || "0", 10);
+      if (k === "text_variants") {
+        const arr = String(v || "").split("\n").map(s => s.trim()).filter(Boolean);
+        stepsState[i].text_variants = arr;
+        stepsState[i].text = arr[0] || ""; // legacy compat
+        const counter = document.getElementById("vcount-" + i);
+        if (counter) counter.textContent = arr.length + " variante" + (arr.length === 1 ? "" : "s");
+        return;
+      }
       stepsState[i][k] = v;
     });
   });
@@ -332,6 +400,10 @@ async function saveAR() {
     trigger_keyword: document.getElementById("f_keyword").value.trim() || null,
     cooldown_hours: parseInt(document.getElementById("f_cooldown").value || "0", 10),
     enabled: document.getElementById("f_enabled").checked,
+    quiet_hours_start: parseInt(document.getElementById("f_quiet_start").value || "0", 10),
+    quiet_hours_end: parseInt(document.getElementById("f_quiet_end").value || "0", 10),
+    min_gap_seconds_between_fires: parseInt(document.getElementById("f_min_gap").value || "0", 10),
+    skip_rate_pct: parseInt(document.getElementById("f_skip_rate").value || "0", 10),
     steps: stepsState,
   };
   if (!body.name) { errEl.textContent = "Ponele un nombre."; return; }
@@ -339,6 +411,11 @@ async function saveAR() {
   for (const s of body.steps) {
     if (s.step_type !== "text" && !s.media_url) {
       errEl.textContent = `Falta URL en uno de los pasos ${s.step_type}.`;
+      return;
+    }
+    const variants = Array.isArray(s.text_variants) ? s.text_variants.filter(Boolean) : [];
+    if (s.step_type === "text" && variants.length === 0) {
+      errEl.textContent = "Cada paso de texto necesita al menos 1 variante.";
       return;
     }
   }
