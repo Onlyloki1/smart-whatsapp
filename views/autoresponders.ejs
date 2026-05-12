@@ -1,0 +1,385 @@
+<%- include("partials/header", { title: "Autoresponders - Smart WhatsApp" }) %>
+<%- include("partials/nav", { active: "autoresponders" }) %>
+
+<main class="container wide">
+  <div class="row-between">
+    <div>
+      <h1>Autoresponders</h1>
+      <p class="muted small">Se disparan automáticamente cuando alguien te escribe por primera vez (CTWA ads).</p>
+    </div>
+    <button class="btn primary" onclick="newAR()">+ Nuevo autoresponder</button>
+  </div>
+
+  <div id="empty" class="muted" style="margin-top:24px; display:none;">
+    No tenés autoresponders configurados todavía.
+  </div>
+
+  <div id="list" class="grid"></div>
+
+  <!-- Editor (panel lateral) -->
+  <div id="editor" class="modal hidden">
+    <div class="editor-card">
+      <div class="row-between">
+        <h2 id="editTitle">Nuevo autoresponder</h2>
+        <button onclick="closeEditor()">✕</button>
+      </div>
+
+      <div class="form-grid">
+        <label>
+          <span>Nombre</span>
+          <input id="f_name" placeholder="Ej: CTWA Principal" />
+        </label>
+
+        <label>
+          <span>Chip al que aplica</span>
+          <select id="f_instance">
+            <option value="">Todos los chips (global)</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Cuándo disparar</span>
+          <select id="f_trigger">
+            <option value="first_message">Primer mensaje del lead</option>
+            <option value="keyword">Cuando contenga palabra clave</option>
+            <option value="any">Cualquier mensaje (cuidado)</option>
+          </select>
+        </label>
+
+        <label id="f_keyword_wrap" style="display:none;">
+          <span>Palabra clave</span>
+          <input id="f_keyword" placeholder="Ej: precio, info" />
+        </label>
+
+        <label>
+          <span>Cooldown (horas)</span>
+          <input id="f_cooldown" type="number" min="0" value="24" />
+          <small class="muted">No re-disparar al mismo nro en este lapso. 0 = siempre.</small>
+        </label>
+
+        <label class="checkbox">
+          <input id="f_enabled" type="checkbox" checked /> Activado
+        </label>
+      </div>
+
+      <h3 style="margin-top:24px;">Secuencia de mensajes</h3>
+      <p class="muted small">Se mandan en orden. Cada uno tiene un delay random simulando que estás escribiendo.</p>
+      <div id="steps"></div>
+      <div class="row" style="margin-top:12px;">
+        <button onclick="addStep('text')">+ Texto</button>
+        <button onclick="addStep('video')">+ Video</button>
+        <button onclick="addStep('image')">+ Imagen</button>
+        <button onclick="addStep('audio')">+ Audio</button>
+      </div>
+
+      <div class="row-between" style="margin-top:24px;">
+        <button onclick="testAR()" id="testBtn" style="display:none;">▶ Probar a mi número</button>
+        <div class="row" style="gap:8px;">
+          <button onclick="closeEditor()">Cancelar</button>
+          <button class="primary" onclick="saveAR()">Guardar</button>
+        </div>
+      </div>
+      <p id="editErr" class="err"></p>
+    </div>
+  </div>
+</main>
+
+<style>
+.container.wide { max-width: 1200px; }
+.editor-card {
+  background: #15151a; border: 1px solid #2a2a30; border-radius: 10px;
+  padding: 24px; max-width: 720px; width: 100%; max-height: 90vh; overflow-y: auto;
+}
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; margin-top: 16px; }
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #aaa; }
+.form-grid input, .form-grid select, .form-grid textarea {
+  background: #0e0e10; border: 1px solid #2a2a30; color: #fff;
+  padding: 9px 11px; border-radius: 6px; font-size: 14px; font-family: inherit;
+}
+.form-grid textarea { resize: vertical; min-height: 70px; }
+.form-grid label.checkbox { flex-direction: row; align-items: center; gap: 8px; }
+.form-grid label.checkbox input { width: 16px; height: 16px; }
+.form-grid label.full { grid-column: 1 / -1; }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.step {
+  background: #1a1a20; border: 1px solid #2a2a30; border-radius: 8px;
+  padding: 14px; margin-top: 10px;
+}
+.step .step-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.step .step-head .badge {
+  background: #6c5ce7; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  text-transform: uppercase; font-weight: 600;
+}
+.step .step-head .idx { color: #888; font-size: 13px; }
+.step .step-head .grow { flex: 1; }
+.step .step-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+.step .step-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #888; }
+.step .step-grid label.full { grid-column: 1 / -1; }
+.step input, .step textarea, .step select {
+  background: #0e0e10; border: 1px solid #2a2a30; color: #fff;
+  padding: 8px 10px; border-radius: 5px; font-size: 13px; font-family: inherit;
+}
+.step textarea { min-height: 60px; resize: vertical; }
+.step .step-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.step .step-foot button { padding: 4px 10px; font-size: 12px; }
+
+.card .ar-meta { color: #888; font-size: 12px; margin-top: 4px; }
+.card .ar-meta span { margin-right: 12px; }
+.toggle-on { color: #6dd66d; }
+.toggle-off { color: #888; }
+</style>
+
+<script>
+let currentARId = null;
+let stepsState = [];
+
+function escape(s){ return String(s||"").replace(/[<>&"']/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"})[c]); }
+
+async function loadList() {
+  const rows = await fetch("/api/autoresponders").then(r => r.json());
+  const list = document.getElementById("list");
+  const empty = document.getElementById("empty");
+  if (!rows.length) {
+    empty.style.display = "block";
+    list.innerHTML = "";
+    return;
+  }
+  empty.style.display = "none";
+  list.innerHTML = rows.map(r => `
+    <div class="card">
+      <div class="row-between">
+        <h3 style="color:#fff;font-size:16px;">${escape(r.name)}</h3>
+        <span class="${r.enabled ? "toggle-on" : "toggle-off"}">${r.enabled ? "● Activo" : "○ Off"}</span>
+      </div>
+      <div class="ar-meta">
+        <span>${r.instance_name ? "Chip: " + escape(r.instance_name) : "Todos los chips"}</span>
+        <span>${triggerLabel(r.trigger_type)}</span>
+      </div>
+      <div class="ar-meta">
+        <span>${r.step_count} pasos</span>
+        <span>${r.fired_count} disparos</span>
+      </div>
+      <div class="actions">
+        <button onclick="editAR(${r.id})">Editar</button>
+        <button onclick="toggleAR(${r.id})">${r.enabled ? "Pausar" : "Activar"}</button>
+        <button class="danger" onclick="delAR(${r.id})">Eliminar</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function triggerLabel(t) {
+  return ({ first_message: "1er mensaje", keyword: "Por keyword", any: "Cualquier mensaje" })[t] || t;
+}
+
+async function loadInstances() {
+  const rows = await fetch("/api/instances").then(r => r.json());
+  const sel = document.getElementById("f_instance");
+  sel.innerHTML = '<option value="">Todos los chips (global)</option>' +
+    rows.map(r => `<option value="${r.id}">${escape(r.name)} (${r.status})</option>`).join("");
+}
+
+function newAR() {
+  currentARId = null;
+  document.getElementById("editTitle").textContent = "Nuevo autoresponder";
+  document.getElementById("f_name").value = "";
+  document.getElementById("f_instance").value = "";
+  document.getElementById("f_trigger").value = "first_message";
+  document.getElementById("f_keyword").value = "";
+  document.getElementById("f_cooldown").value = 24;
+  document.getElementById("f_enabled").checked = true;
+  document.getElementById("f_keyword_wrap").style.display = "none";
+  document.getElementById("testBtn").style.display = "none";
+  document.getElementById("editErr").textContent = "";
+  stepsState = [
+    { step_type: "text", text: "¡Hola! Gracias por escribirme 🙌 Te paso un video corto que te va a interesar:", delay_min_sec: 8, delay_max_sec: 20, show_typing: true },
+    { step_type: "video", text: "", media_url: "", delay_min_sec: 15, delay_max_sec: 30, show_typing: true },
+  ];
+  renderSteps();
+  document.getElementById("editor").classList.remove("hidden");
+}
+
+async function editAR(id) {
+  currentARId = id;
+  document.getElementById("editTitle").textContent = "Editar autoresponder";
+  document.getElementById("editErr").textContent = "";
+  const ar = await fetch(`/api/autoresponders/${id}`).then(r => r.json());
+  document.getElementById("f_name").value = ar.name;
+  document.getElementById("f_instance").value = ar.instance_id || "";
+  document.getElementById("f_trigger").value = ar.trigger_type;
+  document.getElementById("f_keyword").value = ar.trigger_keyword || "";
+  document.getElementById("f_cooldown").value = ar.cooldown_hours;
+  document.getElementById("f_enabled").checked = !!ar.enabled;
+  document.getElementById("f_keyword_wrap").style.display =
+    ar.trigger_type === "keyword" ? "flex" : "none";
+  document.getElementById("testBtn").style.display = "inline-block";
+  stepsState = (ar.steps || []).map(s => ({
+    step_type: s.step_type,
+    text: s.text || "",
+    media_url: s.media_url || "",
+    mime_type: s.mime_type || "",
+    file_name: s.file_name || "",
+    delay_min_sec: s.delay_min_sec,
+    delay_max_sec: s.delay_max_sec,
+    show_typing: s.show_typing,
+  }));
+  renderSteps();
+  document.getElementById("editor").classList.remove("hidden");
+}
+
+document.getElementById("f_trigger").addEventListener("change", e => {
+  document.getElementById("f_keyword_wrap").style.display = e.target.value === "keyword" ? "flex" : "none";
+});
+
+function addStep(type) {
+  const defaults = {
+    text: { text: "", delay_min_sec: 10, delay_max_sec: 25 },
+    video: { text: "", media_url: "", delay_min_sec: 15, delay_max_sec: 30 },
+    image: { text: "", media_url: "", delay_min_sec: 8, delay_max_sec: 18 },
+    audio: { text: "", media_url: "", delay_min_sec: 6, delay_max_sec: 15 },
+  };
+  stepsState.push({
+    step_type: type,
+    show_typing: true,
+    ...defaults[type],
+  });
+  renderSteps();
+}
+
+function removeStep(i) {
+  stepsState.splice(i, 1);
+  renderSteps();
+}
+
+function moveStep(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= stepsState.length) return;
+  [stepsState[i], stepsState[j]] = [stepsState[j], stepsState[i]];
+  renderSteps();
+}
+
+function renderSteps() {
+  document.getElementById("steps").innerHTML = stepsState.map((s, i) => stepHtml(s, i)).join("");
+  stepsState.forEach((s, i) => bindStep(i));
+}
+
+function stepHtml(s, i) {
+  const isMedia = s.step_type !== "text";
+  return `
+    <div class="step" data-i="${i}">
+      <div class="step-head">
+        <span class="badge">${s.step_type}</span>
+        <span class="idx">Paso ${i + 1}</span>
+        <span class="grow"></span>
+        <button onclick="moveStep(${i}, -1)">↑</button>
+        <button onclick="moveStep(${i}, 1)">↓</button>
+        <button class="danger" onclick="removeStep(${i})">Eliminar</button>
+      </div>
+      <div class="step-grid">
+        ${isMedia ? `
+          <label class="full">
+            <span>URL del ${s.step_type} (pública, accesible por Evolution)</span>
+            <input data-k="media_url" value="${escape(s.media_url || "")}" placeholder="https://..." />
+          </label>
+        ` : ""}
+        <label class="full">
+          <span>${isMedia ? "Caption (opcional)" : "Texto del mensaje"}</span>
+          <textarea data-k="text">${escape(s.text || "")}</textarea>
+        </label>
+        <label>
+          <span>Delay min (seg)</span>
+          <input data-k="delay_min_sec" type="number" min="0" value="${s.delay_min_sec}" />
+        </label>
+        <label>
+          <span>Delay max (seg)</span>
+          <input data-k="delay_max_sec" type="number" min="0" value="${s.delay_max_sec}" />
+        </label>
+        <label class="full" style="flex-direction:row;align-items:center;gap:8px;">
+          <input data-k="show_typing" type="checkbox" ${s.show_typing ? "checked" : ""} />
+          <span style="color:#aaa;font-size:13px;">Mostrar "escribiendo..." durante el delay</span>
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function bindStep(i) {
+  const root = document.querySelector(`.step[data-i="${i}"]`);
+  if (!root) return;
+  root.querySelectorAll("[data-k]").forEach(el => {
+    el.addEventListener("input", () => {
+      const k = el.dataset.k;
+      let v = el.type === "checkbox" ? el.checked : el.value;
+      if (k.includes("_sec")) v = parseInt(v || "0", 10);
+      stepsState[i][k] = v;
+    });
+  });
+}
+
+function closeEditor() {
+  document.getElementById("editor").classList.add("hidden");
+}
+
+async function saveAR() {
+  const errEl = document.getElementById("editErr");
+  errEl.textContent = "";
+  const body = {
+    name: document.getElementById("f_name").value.trim(),
+    instance_id: document.getElementById("f_instance").value || null,
+    trigger_type: document.getElementById("f_trigger").value,
+    trigger_keyword: document.getElementById("f_keyword").value.trim() || null,
+    cooldown_hours: parseInt(document.getElementById("f_cooldown").value || "0", 10),
+    enabled: document.getElementById("f_enabled").checked,
+    steps: stepsState,
+  };
+  if (!body.name) { errEl.textContent = "Ponele un nombre."; return; }
+  if (!body.steps.length) { errEl.textContent = "Agregá al menos 1 paso."; return; }
+  for (const s of body.steps) {
+    if (s.step_type !== "text" && !s.media_url) {
+      errEl.textContent = `Falta URL en uno de los pasos ${s.step_type}.`;
+      return;
+    }
+  }
+
+  const url = currentARId ? `/api/autoresponders/${currentARId}` : "/api/autoresponders";
+  const method = currentARId ? "PUT" : "POST";
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) {
+    errEl.textContent = (await r.json()).error || "Error al guardar";
+    return;
+  }
+  closeEditor();
+  loadList();
+}
+
+async function toggleAR(id) {
+  await fetch(`/api/autoresponders/${id}/toggle`, { method: "POST" });
+  loadList();
+}
+
+async function delAR(id) {
+  if (!confirm("¿Eliminar autoresponder? (también borra historial de disparos)")) return;
+  await fetch(`/api/autoresponders/${id}`, { method: "DELETE" });
+  loadList();
+}
+
+async function testAR() {
+  const phone = prompt("Tu número (con código de país, sin +). Ej: 5491136109797");
+  if (!phone) return;
+  const r = await fetch(`/api/autoresponders/${currentARId}/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone })
+  });
+  const j = await r.json();
+  if (!r.ok) { alert("Error: " + j.error); return; }
+  alert(`OK. ${j.steps_enqueued} pasos encolados. Revisá tu WhatsApp en unos segundos.`);
+}
+
+loadInstances();
+loadList();
+</script>
+
+</body></html>

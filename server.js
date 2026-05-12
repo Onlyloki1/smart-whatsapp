@@ -9,7 +9,10 @@ const { authMiddleware, attachUser } = require("./middleware/auth");
 const authRoutes = require("./routes/auth");
 const instancesRoutes = require("./routes/instances");
 const webhookRoutes = require("./routes/webhook");
+const autoresponderRoutes = require("./routes/autoresponder");
+const inboxRoutes = require("./routes/inbox");
 const sender = require("./jobs/sender");
+const autoresponder = require("./jobs/autoresponder");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,6 +41,9 @@ app.get("/health", async (req, res) => {
 // ─── API Routes ────────────────────────────────────────
 app.use("/api/auth", authRoutes);
 app.use("/api/instances", instancesRoutes);
+app.use("/api/autoresponders", autoresponderRoutes);
+app.use("/api/inbox", inboxRoutes);
+app.use("/api/stats", require("./routes/stats"));
 app.use("/api/webhook", webhookRoutes); // webhook NO va con authMiddleware
 
 // ─── Vistas ────────────────────────────────────────────
@@ -68,6 +74,10 @@ app.get("/campaigns", authMiddleware, (req, res) => {
   res.render("campaigns", { user: req.user });
 });
 
+app.get("/autoresponders", authMiddleware, (req, res) => {
+  res.render("autoresponders", { user: req.user });
+});
+
 app.get("/inbox", authMiddleware, (req, res) => {
   res.render("inbox", { user: req.user });
 });
@@ -88,5 +98,8 @@ app.listen(PORT, () => {
   console.log(`[APP] smart-whatsapp listening on :${PORT}`);
   if (process.env.DISABLE_SENDER !== "true") {
     sender.start();
+  }
+  if (process.env.DISABLE_AUTORESPONDER !== "true") {
+    autoresponder.start();
   }
 });

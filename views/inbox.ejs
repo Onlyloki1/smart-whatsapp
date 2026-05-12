@@ -1,8 +1,276 @@
 <%- include("partials/header", { title: "Inbox - Smart WhatsApp" }) %>
 <%- include("partials/nav", { active: "inbox" }) %>
 
-<main class="container">
-  <h1>Inbox unificado</h1>
-  <p class="muted">Próximamente: respuestas de todos tus chips en un solo lugar.</p>
+<main class="inbox-wrap">
+  <!-- Sidebar: lista de chats -->
+  <aside class="chats">
+    <div class="chats-head">
+      <input id="search" placeholder="🔍 Buscar..." />
+      <div class="filters">
+        <select id="filterInstance">
+          <option value="">Todos los chips</option>
+        </select>
+        <label class="filter-check">
+          <input type="checkbox" id="filterUnread" /> Sin leer
+        </label>
+      </div>
+    </div>
+    <div id="chats" class="chats-list"></div>
+  </aside>
+
+  <!-- Conversación activa -->
+  <section class="convo">
+    <div id="convoEmpty" class="convo-empty">
+      <p class="muted">Elegí una conversación de la izquierda.</p>
+    </div>
+    <div id="convoView" class="hidden">
+      <header class="convo-head">
+        <div>
+          <h3 id="convoName">—</h3>
+          <p class="muted small"><span id="convoPhone"></span> · <span id="convoChip"></span></p>
+        </div>
+        <div id="takeoverBox" class="takeover-box hidden">
+          <span class="badge-warn">🤖 Autoresponder desactivado para este chat</span>
+          <button onclick="releaseTakeover()">Reactivar bot</button>
+        </div>
+      </header>
+      <div id="messages" class="messages"></div>
+      <form id="sendForm" class="send-form">
+        <input id="sendText" placeholder="Escribí un mensaje..." autocomplete="off" />
+        <button type="submit" class="primary">Enviar</button>
+      </form>
+      <p id="sendErr" class="err"></p>
+    </div>
+  </section>
 </main>
+
+<style>
+.inbox-wrap {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  height: calc(100vh - 56px);
+  background: #0e0e10;
+}
+
+/* Chats sidebar */
+.chats { border-right: 1px solid #2a2a30; display: flex; flex-direction: column; min-height: 0; }
+.chats-head { padding: 12px; border-bottom: 1px solid #2a2a30; display: flex; flex-direction: column; gap: 8px; }
+.chats-head input[type=text], .chats-head input:not([type=checkbox]) {
+  background: #15151a; border: 1px solid #2a2a30; color: #fff;
+  padding: 8px 12px; border-radius: 999px; font-size: 13px; width: 100%;
+}
+.chats-head select {
+  background: #15151a; border: 1px solid #2a2a30; color: #fff;
+  padding: 6px 8px; border-radius: 6px; font-size: 13px; flex: 1;
+}
+.filters { display: flex; gap: 10px; align-items: center; }
+.filter-check { font-size: 12px; color: #aaa; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.chats-list { flex: 1; overflow-y: auto; }
+.chat-item {
+  padding: 12px 14px; border-bottom: 1px solid #1c1c22; cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.chat-item:hover { background: #15151a; }
+.chat-item.active { background: #1a1a22; border-left: 3px solid #6c5ce7; }
+.chat-item .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.chat-item .name { font-weight: 600; color: #fff; font-size: 14px; }
+.chat-item .time { font-size: 11px; color: #888; }
+.chat-item .preview { font-size: 13px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item .meta { font-size: 11px; color: #888; display: flex; gap: 8px; }
+.unread-dot {
+  background: #6c5ce7; color: #fff; font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 999px; min-width: 18px; text-align: center;
+}
+
+/* Convo */
+.convo { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.convo-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.hidden { display: none !important; }
+#convoView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+.convo-head {
+  padding: 14px 18px; border-bottom: 1px solid #2a2a30;
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+}
+.convo-head h3 { margin: 0; font-size: 16px; color: #fff; }
+.takeover-box {
+  display: flex; align-items: center; gap: 10px;
+}
+.badge-warn {
+  background: #4e3613; color: #ffc870; padding: 4px 10px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+}
+
+.messages {
+  flex: 1; overflow-y: auto; padding: 18px;
+  display: flex; flex-direction: column; gap: 6px;
+  background: #0e0e10;
+}
+.msg {
+  max-width: 70%; padding: 8px 12px; border-radius: 10px; font-size: 14px;
+  word-wrap: break-word; line-height: 1.4;
+}
+.msg.in { align-self: flex-start; background: #1f1f26; color: #e8e8ea; border-bottom-left-radius: 2px; }
+.msg.out { align-self: flex-end; background: #2f4f1f; color: #e8f3dc; border-bottom-right-radius: 2px; }
+.msg .time { font-size: 10px; color: #999; margin-top: 4px; display: block; }
+.msg img, .msg video { max-width: 100%; border-radius: 6px; margin-bottom: 4px; }
+.msg .media-link { color: #8b8bff; font-size: 12px; }
+
+.send-form {
+  display: flex; gap: 10px; padding: 14px; border-top: 1px solid #2a2a30; background: #15151a;
+}
+.send-form input {
+  flex: 1; background: #0e0e10; border: 1px solid #2a2a30; color: #fff;
+  padding: 10px 14px; border-radius: 999px; font-size: 14px;
+}
+.send-form button { padding: 8px 20px; border-radius: 999px; }
+</style>
+
+<script>
+let activeConvoId = null;
+let pollTimer = null;
+
+function escape(s){ return String(s||"").replace(/[<>&"']/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"})[c]); }
+function timeShort(d) {
+  if (!d) return "";
+  const dt = new Date(d);
+  const now = new Date();
+  const sameDay = dt.toDateString() === now.toDateString();
+  if (sameDay) return dt.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+}
+
+async function loadInstances() {
+  const rows = await fetch("/api/instances").then(r => r.json());
+  const sel = document.getElementById("filterInstance");
+  sel.innerHTML = '<option value="">Todos los chips</option>' +
+    rows.map(r => `<option value="${r.id}">${escape(r.name)}</option>`).join("");
+}
+
+async function loadChats() {
+  const q = document.getElementById("search").value.trim();
+  const inst = document.getElementById("filterInstance").value;
+  const unread = document.getElementById("filterUnread").checked ? "1" : "";
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (inst) params.set("instance_id", inst);
+  if (unread) params.set("unread", unread);
+
+  const rows = await fetch("/api/inbox/conversations?" + params).then(r => r.json());
+  const list = document.getElementById("chats");
+  if (!rows.length) {
+    list.innerHTML = '<div style="padding:20px;color:#888;text-align:center;font-size:13px;">Sin conversaciones todavía.</div>';
+    return;
+  }
+  list.innerHTML = rows.map(r => `
+    <div class="chat-item ${r.id == activeConvoId ? "active" : ""}" onclick="openChat(${r.id})">
+      <div class="row">
+        <span class="name">${escape(r.contact_name || r.phone)}</span>
+        <span class="time">${timeShort(r.last_msg_at)}</span>
+      </div>
+      <div class="row">
+        <span class="preview">${r.last_direction === "out" ? "↪ " : ""}${escape(r.last_msg_text || "")}</span>
+        ${r.unread_count > 0 ? `<span class="unread-dot">${r.unread_count}</span>` : ""}
+      </div>
+      <div class="meta">
+        <span>${escape(r.instance_name)}</span>
+        ${r.human_takeover ? '<span style="color:#ffc870;">👤 manual</span>' : ""}
+      </div>
+    </div>
+  `).join("");
+}
+
+async function openChat(id) {
+  activeConvoId = id;
+  document.getElementById("convoEmpty").classList.add("hidden");
+  document.getElementById("convoView").classList.remove("hidden");
+  document.getElementById("sendErr").textContent = "";
+
+  const data = await fetch(`/api/inbox/conversations/${id}/messages`).then(r => r.json());
+  const c = data.conversation;
+  document.getElementById("convoName").textContent = c.contact_name || c.phone;
+  document.getElementById("convoPhone").textContent = c.phone;
+  document.getElementById("convoChip").textContent = c.instance_name + (c.instance_phone ? ` (${c.instance_phone})` : "");
+
+  const tk = document.getElementById("takeoverBox");
+  if (c.human_takeover) tk.classList.remove("hidden");
+  else tk.classList.add("hidden");
+
+  renderMessages(data.messages);
+  loadChats(); // refresh unread count
+}
+
+function renderMessages(msgs) {
+  const box = document.getElementById("messages");
+  box.innerHTML = msgs.map(m => `
+    <div class="msg ${m.direction}">
+      ${m.media_url ? renderMedia(m) : ""}
+      ${m.text ? escape(m.text).replace(/\n/g, "<br>") : ""}
+      <span class="time">${timeShort(m.created_at)}</span>
+    </div>
+  `).join("");
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderMedia(m) {
+  if (m.media_type === "image") return `<img src="${escape(m.media_url)}" alt="" />`;
+  if (m.media_type === "video") return `<video src="${escape(m.media_url)}" controls></video>`;
+  return `<a class="media-link" href="${escape(m.media_url)}" target="_blank">📎 ${m.media_type || "archivo"}</a>`;
+}
+
+document.getElementById("sendForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = document.getElementById("sendText");
+  const text = input.value.trim();
+  if (!text || !activeConvoId) return;
+  const errEl = document.getElementById("sendErr");
+  errEl.textContent = "";
+
+  const r = await fetch(`/api/inbox/conversations/${activeConvoId}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+  if (!r.ok) {
+    errEl.textContent = (await r.json()).error || "Error al enviar";
+    return;
+  }
+  input.value = "";
+  openChat(activeConvoId); // recargar
+});
+
+async function releaseTakeover() {
+  if (!activeConvoId) return;
+  if (!confirm("¿Reactivar el autoresponder en esta conversación?")) return;
+  await fetch(`/api/inbox/conversations/${activeConvoId}/release-takeover`, { method: "POST" });
+  openChat(activeConvoId);
+}
+
+document.getElementById("search").addEventListener("input", debounce(loadChats, 300));
+document.getElementById("filterInstance").addEventListener("change", loadChats);
+document.getElementById("filterUnread").addEventListener("change", loadChats);
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+// Auto-refresh cada 8s
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    loadChats();
+    if (activeConvoId) {
+      fetch(`/api/inbox/conversations/${activeConvoId}/messages`)
+        .then(r => r.json())
+        .then(d => renderMessages(d.messages));
+    }
+  }, 8000);
+}
+
+loadInstances();
+loadChats();
+startPolling();
+</script>
+
 </body></html>

@@ -7,31 +7,49 @@
 
   <div class="cards">
     <div class="card">
-      <h3>Mis Números</h3>
+      <h3>Chips conectados</h3>
       <p class="big" id="cChips">—</p>
       <a href="/instances" class="btn">Ver</a>
     </div>
     <div class="card">
-      <h3>Campañas activas</h3>
-      <p class="big" id="cCampaigns">—</p>
-      <a href="/campaigns" class="btn">Ver</a>
+      <h3>Autoresponders disparados hoy</h3>
+      <p class="big" id="cFired">—</p>
+      <a href="/autoresponders" class="btn">Configurar</a>
     </div>
     <div class="card">
-      <h3>Mensajes hoy</h3>
-      <p class="big" id="cToday">—</p>
+      <h3>Mensajes enviados hoy</h3>
+      <p class="big" id="cSent">—</p>
+      <p class="muted small" id="cQueue">—</p>
+    </div>
+    <div class="card">
+      <h3>Mensajes recibidos hoy</h3>
+      <p class="big" id="cReceived">—</p>
     </div>
     <div class="card">
       <h3>Inbox sin leer</h3>
       <p class="big" id="cUnread">—</p>
       <a href="/inbox" class="btn">Ver</a>
     </div>
+    <div class="card">
+      <h3>Chats en manual</h3>
+      <p class="big" id="cTakeover">—</p>
+      <p class="muted small">Sin autoresponder activo.</p>
+    </div>
   </div>
 </main>
 
 <script>
-  fetch("/api/instances").then(r => r.json()).then(rows => {
-    document.getElementById("cChips").textContent = rows.length + " / " + 5;
-  });
-  // TODO: agregar endpoints de stats
+async function loadStats() {
+  const s = await fetch("/api/stats/dashboard").then(r => r.json());
+  document.getElementById("cChips").textContent = s.chips + " / 5";
+  document.getElementById("cFired").textContent = s.autoresponders_fired_today;
+  document.getElementById("cSent").textContent = s.sent_today;
+  document.getElementById("cQueue").textContent = s.queue_pending > 0 ? `${s.queue_pending} en cola` : "";
+  document.getElementById("cReceived").textContent = s.received_today;
+  document.getElementById("cUnread").textContent = s.unread;
+  document.getElementById("cTakeover").textContent = s.conversations_takeover;
+}
+loadStats();
+setInterval(loadStats, 15000);
 </script>
 </body></html>
