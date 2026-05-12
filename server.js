@@ -1,12 +1,10 @@
-process.stdout.write("[BOOT] server.js entering require phase\n");
-process.on("uncaughtException", (e) => { process.stderr.write("[FATAL uncaught] " + e.stack + "\n"); process.exit(1); });
-process.on("unhandledRejection", (e) => { process.stderr.write("[FATAL rejection] " + (e?.stack || e) + "\n"); process.exit(1); });
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const cookieParser = require("cookie-parser");
 
 const { pool } = require("./db");
+const { runMigrations } = require("./lib/migrate");
 const { authMiddleware, attachUser } = require("./middleware/auth");
 
 const authRoutes = require("./routes/auth");
@@ -97,12 +95,22 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`[APP] smart-whatsapp listening on :${PORT}`);
-  if (process.env.DISABLE_SENDER !== "true") {
-    sender.start();
+async function boot() {
+  try {
+    await runMigrations();
+  } catch (err) {
+    console.error("[BOOT] Migration failed:", err.message);
+    process.exit(1);
   }
-  if (process.env.DISABLE_AUTORESPONDER !== "true") {
-    autoresponder.start();
-  }
-});
+  app.listen(PORT, () => {
+    console.log(`[APP] smart-whatsapp listening on :${PORT}`);
+    if (process.env.DISABLE_SENDER !== "true") {
+      sender.start();
+    }
+    if (process.env.DISABLE_AUTORESPONDER !== "true") {
+      autoresponder.start();
+    }
+  });
+}
+
+boot();
