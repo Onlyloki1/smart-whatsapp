@@ -51,12 +51,20 @@ Plataforma para correr CTWA ads (Click-to-WhatsApp). El lead clickea el ad → e
 
 ### Estado deploy
 
-**Ya estaba en Railway:**
-- ✅ Postgres
+**LIVE 2026-05-12**: `https://smart-whatsapp-production.up.railway.app`
+- ✅ Postgres (fantastic-radiance project)
 - ✅ Evolution API en `https://evolution-api-production-fb1d.up.railway.app`
+- ✅ App Node deployada, `/health` devuelve `{ok:true, db:up}`
 
-**Falta:**
-- ⏳ App Node nunca se deployó. Repo en `Onlyloki1/smart-whatsapp.git` con solo el initial commit. Hay que: pushear cambios → crear service Railway desde repo → setear env vars → escanear QR del primer chip.
+**Project IDs (Railway):**
+- Project: `b25e400c-d59a-4abf-9ab7-bbbc37b57192` (name: `fantastic-radiance`)
+- Environment (production): `76032945-b3a2-4266-a038-e37f54c45f90`
+- Service smart-whatsapp: `2de0f18f-c895-4ef7-be43-4929cd297128`
+- Service evolution-api: `9a3d5126-96ca-4c62-9828-3ca7758ef0a5`
+- Service Postgres: `24b3ced4-4fdc-4091-9dae-af50b51b45be`
+
+**Gotcha resuelto — `&&` chain en Railway startCommand**
+El startCommand `node lib/migrate.js && node server.js` NO encadenaba correctamente en Railway: migrate corría OK pero `node server.js` nunca se ejecutaba. Healthcheck fallaba siempre. Solución: meter `runMigrations()` adentro de `server.js boot()` para que un solo proceso Node maneje todo. railway.json ahora tiene solo `node server.js`.
 
 ### Variables de entorno requeridas
 - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
