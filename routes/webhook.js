@@ -56,6 +56,10 @@ router.post("/evolution/:evolutionInstance", async (req, res) => {
       case "MESSAGES_UPSERT":
         await handleIncomingMessage(inst, data);
         break;
+      case "group-participants.update":
+      case "GROUP_PARTICIPANTS_UPDATE":
+        await handleGroupParticipantsUpdate(inst, data);
+        break;
     }
   } catch (err) {
     console.error("[WEBHOOK ERR]", err.message);
@@ -185,6 +189,53 @@ async function handleIncomingMessage(inst, data) {
         .catch(() => {});
     }
   }
+}
+
+// ─── Group participants update (alguien entró o salió de un grupo) ─
+async function handleGroupParticipantsUpdate(inst, data) {
+  // Evolution envía: { id (group jid), participants: [phone], action: "add"|"remove" }
+  const groupJid = data?.id || data?.groupJid || data?.remoteJid;
+  const action = data?.action;
+  const participants = data?.participants || [];
+  if (!groupJid || action !== "add" || !participants.length) return;
+
+  // ¿Es un grupo que creamos por una agenda?
+  const booking = await queryOne(
+    `SELECT * FROM booking_events
+     WHERE group_jid = $1 AND status IN ('dm_sent', 'pending')
+     ORDER BY id DESC LIMIT 1`,
+    [groupJid]
+  );
+  if (!booking) return;
+
+  // Normalizar phones: pueden venir como "549...@s.whatsapp.net" o ya pelado
+  const cleanedParticipants = participants.map(p =>
+    String(p).replace(/@s\.whatsapp\.net$/, "").replace(/@c\.us$/, "").replace(/[^0-9]/g, "")
+  );
+  const cleanLeadPhone = String(booking.lead_phone).replace(/[^0-9]/g, "");
+
+  // ¿Entró el lead esperado?
+  if (!cleanedParticipants.includes(cleanLeadPhone)) return;
+
+  // Cargar booking_config para tomar el delay configurable
+  const cfg = await queryOne(
+    `SELECT post_join_delay_seconds FROM booking_config WHERE user_id = $1`,
+    [booking.user_id]
+  );
+  const delaySec = cfg?.post_join_delay_seconds ?? 60;
+
+  await exec(
+    `UPDATE booking_events
+     SET status = 'joined',
+         lead_joined_at = NOW(),
+         post_join_scheduled_at = NOW() + ($1 || ' seconds')::interval
+     WHERE id = $2 AND status IN ('dm_sent', 'pending')`,
+    [delaySec, booking.id]
+  );
+
+  await logEvent(booking.user_id, booking.instance_id, "booking_lead_joined", {
+    booking_id: booking.id, group_jid: groupJid, phone: cleanLeadPhone,
+  });
 }
 
 module.exports = router;

@@ -12,8 +12,12 @@ const instancesRoutes = require("./routes/instances");
 const webhookRoutes = require("./routes/webhook");
 const autoresponderRoutes = require("./routes/autoresponder");
 const inboxRoutes = require("./routes/inbox");
+const closersRoutes = require("./routes/closers");
+const bookingConfigRoutes = require("./routes/booking-config");
+const hooksRoutes = require("./routes/hooks");
 const sender = require("./jobs/sender");
 const autoresponder = require("./jobs/autoresponder");
+const booking = require("./jobs/booking");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,8 +48,11 @@ app.use("/api/auth", authRoutes);
 app.use("/api/instances", instancesRoutes);
 app.use("/api/autoresponders", autoresponderRoutes);
 app.use("/api/inbox", inboxRoutes);
+app.use("/api/closers", closersRoutes);
+app.use("/api/booking-config", bookingConfigRoutes);
+app.use("/api/hooks", hooksRoutes); // hooks públicos (GHL/Calendly) — sin auth
 app.use("/api/stats", require("./routes/stats"));
-app.use("/api/webhook", webhookRoutes); // webhook NO va con authMiddleware
+app.use("/api/webhook", webhookRoutes); // webhook Evolution — sin auth
 
 // ─── Vistas ────────────────────────────────────────────
 app.get("/", (req, res) => {
@@ -83,6 +90,10 @@ app.get("/inbox", authMiddleware, (req, res) => {
   res.render("inbox", { user: req.user });
 });
 
+app.get("/booking", authMiddleware, (req, res) => {
+  res.render("booking", { user: req.user });
+});
+
 // ─── 404 ───────────────────────────────────────────────
 app.use((req, res) => {
   if (req.accepts("html")) return res.status(404).render("404");
@@ -109,6 +120,9 @@ async function boot() {
     }
     if (process.env.DISABLE_AUTORESPONDER !== "true") {
       autoresponder.start();
+    }
+    if (process.env.DISABLE_BOOKING !== "true") {
+      booking.start();
     }
   });
 }
