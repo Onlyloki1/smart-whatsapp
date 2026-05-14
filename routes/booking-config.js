@@ -35,6 +35,7 @@ router.put("/", async (req, res) => {
     team_member_ids = [],              // ids de la tabla closers (= equipo) a agregar al grupo
     delay_before_dm_minutes, post_join_delay_seconds,
     group_name_template, dm_text, post_join_text, post_join_audio_url,
+    contact_name_template,
     promote_team_to_admin = true,
     timezone, enabled,
   } = req.body || {};
@@ -81,10 +82,11 @@ router.put("/", async (req, res) => {
        dm_text = $7,
        post_join_text = $8,
        post_join_audio_url = $9,
-       promote_team_to_admin = $10,
-       timezone = $11,
-       enabled = $12
-     WHERE user_id = $13`,
+       contact_name_template = $10,
+       promote_team_to_admin = $11,
+       timezone = $12,
+       enabled = $13
+     WHERE user_id = $14`,
     [
       instance_id || null,
       JSON.stringify(creatorIds),
@@ -95,6 +97,7 @@ router.put("/", async (req, res) => {
       dm_text || '',
       post_join_text || '',
       post_join_audio_url || null,
+      contact_name_template || '{lead_name}',
       promote_team_to_admin !== false,
       timezone || 'America/Argentina/Buenos_Aires',
       enabled !== false,

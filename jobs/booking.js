@@ -57,6 +57,7 @@ async function pickGroupCreator(instanceIds) {
 async function processPendingDMs() {
   const items = await query(`
     SELECT be.*, bc.group_name_template, bc.dm_text, bc.timezone,
+           bc.contact_name_template,
            bc.instance_id AS admin_instance_id,
            bc.group_creator_instance_ids, bc.team_member_ids,
            bc.promote_team_to_admin,
@@ -140,6 +141,20 @@ async function processPendingDMs() {
       ctx.invite_url = inviteUrl;
       const dmText = renderTpl(ev.dm_text, ctx);
       const cleanLead = String(ev.lead_phone).replace(/[^0-9]/g, "");
+
+      // 7a. Guardar contacto del lead en la libreta del admin chip
+      // (con el nombre del calendario o template configurado)
+      const contactNameTpl = ev.contact_name_template || "{lead_name}";
+      const contactName = renderTpl(contactNameTpl, ctx).trim();
+      if (contactName && ev.lead_name) {
+        evo.updateContactName(ev.admin_evolution_instance, cleanLead, contactName).catch(()=>{});
+        // Y reflejar en nuestra DB también
+        await exec(
+          `UPDATE conversations SET custom_name = $1
+           WHERE instance_id = $2 AND phone = $3`,
+          [contactName, ev.admin_instance_id, cleanLead]
+        );
+      }
 
       await evo.sendPresence(ev.admin_evolution_instance, cleanLead, "composing", rand(2000, 4000)).catch(()=>{});
       const dmRes = await evo.sendText(ev.admin_evolution_instance, cleanLead, dmText);

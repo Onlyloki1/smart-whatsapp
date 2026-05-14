@@ -55,6 +55,11 @@
         <small class="muted">Variables: {date} {time} {datetime} {lead_name} {budget_rank}. Ej: <code>15/04 - 13:00 - Juan Carlos - (1)</code></small>
       </label>
       <label class="full">
+        <span>Nombre con el que se guarda el contacto (libreta del admin chip)</span>
+        <input id="cfg_contact_name" placeholder="{lead_name}" />
+        <small class="muted">Cuando el booking se procesa, el chip de Tomi guarda al lead con este nombre — fácil de buscar en WhatsApp. Variables disponibles: {lead_name} {date} {time} {budget_rank}. Ej: <code>{lead_name} ({budget_rank})</code> → "Juan Carlos (1)"</small>
+      </label>
+      <label class="full">
         <span>Mensaje DM al lead (con invite link)</span>
         <textarea id="cfg_dm" rows="5"></textarea>
         <small class="muted">Variables: {date} {time} {invite_url} {lead_name} {budget_rank}.</small>
@@ -176,6 +181,7 @@ async function loadAll() {
   document.getElementById("cfg_delay_dm").value = r.delay_before_dm_minutes ?? 10;
   document.getElementById("cfg_delay_post").value = r.post_join_delay_seconds ?? 60;
   document.getElementById("cfg_group_name").value = r.group_name_template || "{date} - {time} - {lead_name} - ({budget_rank})";
+  document.getElementById("cfg_contact_name").value = r.contact_name_template || "{lead_name}";
   document.getElementById("cfg_dm").value = r.dm_text || "";
   document.getElementById("cfg_post").value = r.post_join_text || "";
   document.getElementById("cfg_audio").value = r.post_join_audio_url || "";
@@ -292,6 +298,7 @@ async function saveCfg() {
     delay_before_dm_minutes: parseInt(document.getElementById("cfg_delay_dm").value || "10", 10),
     post_join_delay_seconds: parseInt(document.getElementById("cfg_delay_post").value || "60", 10),
     group_name_template: document.getElementById("cfg_group_name").value,
+    contact_name_template: document.getElementById("cfg_contact_name").value,
     dm_text: document.getElementById("cfg_dm").value,
     post_join_text: document.getElementById("cfg_post").value,
     post_join_audio_url: document.getElementById("cfg_audio").value || null,
