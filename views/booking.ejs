@@ -3,60 +3,74 @@
 
 <main class="container wide">
   <h1>Booking flow</h1>
-  <p class="muted small">Cuando un lead reserva en GHL/Calendly, el bot crea un grupo, lo invita al lead y dispara mensajes automáticos.</p>
+  <p class="muted small">Cuando un lead reserva en GHL/Calendly, el bot rota entre tus 3 chips group-creators, crea grupo, mete al equipo como admin y dispara el flujo.</p>
 
-  <!-- Sección Closers -->
+  <!-- Sección Equipo -->
   <section style="margin-top:32px;">
     <div class="row-between">
-      <h2 style="font-size:18px;">Closers</h2>
-      <button onclick="addCloser()">+ Agregar closer</button>
+      <h2 style="font-size:18px;">Equipo (van adentro del grupo)</h2>
+      <button onclick="addMember()">+ Agregar miembro</button>
     </div>
-    <div id="closersList" class="muted small">Cargando...</div>
+    <p class="muted small">Tomi (owner), Carlos (closer), Triager — todos van como admin del grupo creado.</p>
+    <div id="teamList" class="muted small">Cargando...</div>
+  </section>
+
+  <!-- Sección Chips -->
+  <section style="margin-top:32px;">
+    <h2 style="font-size:18px;">Asignación de chips</h2>
+    <div class="form-grid">
+      <label class="full">
+        <span>Admin chip (capta leads + manda el DM con el invite)</span>
+        <select id="cfg_instance"></select>
+        <small class="muted">El chip de Tomi. NO crea grupos — solo manda el mensaje al lead.</small>
+      </label>
+      <label class="full">
+        <span>Chips group-creators (rotación round-robin, menos cargado del día primero)</span>
+        <div id="cfg_creators_box" class="checkbox-list"></div>
+        <small class="muted">Marcá los 2-3 chips que solo crean grupos. NO deberían ser el mismo que el admin chip.</small>
+      </label>
+      <label class="full">
+        <span>Team members que se agregan al grupo</span>
+        <div id="cfg_team_box" class="checkbox-list"></div>
+        <small class="muted">Tildá quiénes entran a cada grupo creado.</small>
+      </label>
+    </div>
   </section>
 
   <!-- Sección Config -->
   <section style="margin-top:32px;">
-    <h2 style="font-size:18px;">Configuración del flujo</h2>
+    <h2 style="font-size:18px;">Templates y timing</h2>
     <div class="form-grid">
       <label>
-        <span>Chip que crea grupos</span>
-        <select id="cfg_instance"></select>
-        <small class="muted">Va a ser el admin del grupo + el que manda los DMs.</small>
-      </label>
-      <label>
-        <span>Closer default</span>
-        <select id="cfg_closer"></select>
-        <small class="muted">Se agrega al grupo automáticamente.</small>
-      </label>
-      <label>
         <span>Esperar antes del DM (minutos)</span>
-        <input id="cfg_delay_dm" type="number" min="0" value="5" />
-        <small class="muted">Tiempo desde que el lead reserva hasta que mandamos el DM.</small>
+        <input id="cfg_delay_dm" type="number" min="0" value="10" />
       </label>
       <label>
         <span>Esperar tras entrar al grupo (segundos)</span>
         <input id="cfg_delay_post" type="number" min="0" value="60" />
-        <small class="muted">Tiempo desde que entra hasta mandar texto+audio.</small>
       </label>
       <label class="full">
         <span>Nombre del grupo (plantilla)</span>
-        <input id="cfg_group_name" placeholder="{date} {time} - Consultoría Smart Acquisition" />
-        <small class="muted">Variables: {date}, {time}, {datetime}, {lead_name}, {closer_name}.</small>
+        <input id="cfg_group_name" placeholder="{date} - {time} - {lead_name} - ({budget_rank})" />
+        <small class="muted">Variables: {date} {time} {datetime} {lead_name} {budget_rank}. Ej: <code>15/04 - 13:00 - Juan Carlos - (1)</code></small>
       </label>
       <label class="full">
         <span>Mensaje DM al lead (con invite link)</span>
         <textarea id="cfg_dm" rows="5"></textarea>
-        <small class="muted">Variables: {date}, {time}, {invite_url}, {lead_name}, {closer_name}.</small>
+        <small class="muted">Variables: {date} {time} {invite_url} {lead_name} {budget_rank}.</small>
       </label>
       <label class="full">
         <span>Mensaje de bienvenida en el grupo (al entrar el lead)</span>
         <textarea id="cfg_post" rows="3"></textarea>
-        <small class="muted">Variables: {lead_name}, {date}, {time}.</small>
+        <small class="muted">Variables: {lead_name} {date} {time} {budget_rank}.</small>
       </label>
       <label class="full">
         <span>URL del audio de bienvenida (opcional)</span>
         <input id="cfg_audio" placeholder="https://..." />
-        <small class="muted">Audio que se manda en el grupo después del texto. Tiene que ser URL pública (.mp3 / .ogg / .m4a).</small>
+        <small class="muted">Audio que se manda en el grupo. URL pública (.mp3 / .ogg / .m4a).</small>
+      </label>
+      <label class="checkbox">
+        <input id="cfg_promote" type="checkbox" checked /> Promover team a admin en el grupo
       </label>
       <label class="checkbox">
         <input id="cfg_enabled" type="checkbox" checked /> Booking flow activado
@@ -69,10 +83,10 @@
     <p id="cfgMsg" class="err" style="margin-top:8px;"></p>
   </section>
 
-  <!-- Webhook URL para GHL -->
+  <!-- Webhook URL -->
   <section style="margin-top:32px;">
     <h2 style="font-size:18px;">Webhook URL para GHL / Calendly</h2>
-    <p class="muted small">Pegá esta URL en el webhook de GHL/Calendly. Mandá POST con JSON: <code>{ phone, name, scheduled_at }</code>.</p>
+    <p class="muted small">Pegá en GHL. POST con JSON: <code>{ phone, name, scheduled_at, budget_rank }</code> (budget_rank: 1-4).</p>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <code id="webhookUrl" style="background:#0e0e10;padding:10px 14px;border-radius:6px;font-size:13px;flex:1;word-break:break-all;">Cargando...</code>
       <button onclick="copyWebhook()">📋 Copiar</button>
@@ -100,20 +114,39 @@
 .form-grid label.checkbox { flex-direction: row; align-items: center; gap: 8px; }
 .form-grid label.checkbox input { width: 16px; height: 16px; }
 
-.closer-row {
-  display:grid; grid-template-columns: 1fr 200px 80px auto auto; gap: 10px;
+.checkbox-list {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  background: #0e0e10; border: 1px solid #2a2a30; border-radius: 6px; padding: 10px;
+}
+.checkbox-pill {
+  display: flex; align-items: center; gap: 6px;
+  background: #1a1a22; padding: 6px 10px; border-radius: 999px; font-size: 12px;
+  border: 1px solid #2a2a30; cursor: pointer; user-select: none;
+}
+.checkbox-pill:hover { background: #22222c; }
+.checkbox-pill input { margin: 0; width: 14px; height: 14px; }
+.checkbox-pill.on { background: #2e2052; border-color: #6c5ce7; color: #fff; }
+
+.member-row {
+  display:grid; grid-template-columns: 1fr 180px 110px 70px auto auto; gap: 10px;
   align-items: center; padding: 10px; background: #15151a; border: 1px solid #2a2a30;
   border-radius: 6px; margin-top: 8px;
 }
-.closer-row input, .closer-row select {
+.member-row input, .member-row select {
   background: #0e0e10; border: 1px solid #2a2a30; color: #fff;
   padding: 7px 9px; border-radius: 5px; font-size: 13px;
 }
-.closer-row button { padding: 5px 10px; font-size: 12px; }
+.member-row button { padding: 5px 10px; font-size: 12px; }
+.role-badge { padding: 2px 8px; border-radius: 999px; font-size: 10px; text-transform: uppercase; font-weight: 600; }
+.role-badge.owner { background: #4e1313; color: #ff9090; }
+.role-badge.closer { background: #134e26; color: #6dd66d; }
+.role-badge.triager { background: #1a3a4e; color: #70c0ff; }
+.role-badge.other { background: #2a2a30; color: #aaa; }
+
 .event-row {
   padding: 10px 12px; background: #15151a; border: 1px solid #2a2a30;
   border-radius: 6px; margin-top: 8px; font-size: 13px;
-  display: grid; grid-template-columns: 60px 1fr 120px 120px; gap: 12px; align-items: center;
+  display: grid; grid-template-columns: 90px 1fr 120px 110px; gap: 12px; align-items: center;
 }
 .event-status { font-size:11px; font-weight:600; padding:3px 8px; border-radius:999px; text-transform:uppercase; }
 .event-status.pending, .event-status.creating_group { background:#4e3613; color:#ffc870; }
@@ -121,106 +154,148 @@
 .event-status.joined, .event-status.sending_welcome { background:#1a4e3a; color:#70ffc0; }
 .event-status.completed { background:#134e26; color:#6dd66d; }
 .event-status.failed { background:#4e1313; color:#ff7070; }
+.rank-tag { background:#2e2052; color:#fff; padding:2px 7px; border-radius:6px; font-size:11px; }
 </style>
 
 <script>
 let cfg = null;
+let instances = [];
+let teamMembers = [];
+
 function esc(s){ return String(s||"").replace(/[<>&"']/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"})[c]); }
 
 async function loadAll() {
   const r = await fetch("/api/booking-config").then(r => r.json());
   cfg = r;
-  renderInstances(r._instances || []);
-  renderClosers(r._closers || []);
-  document.getElementById("cfg_delay_dm").value = r.delay_before_dm_minutes ?? 5;
+  instances = r._instances || [];
+  teamMembers = r._closers || [];
+  renderAdminSelect();
+  renderCreatorsCheckboxes(cfg.group_creator_instance_ids || []);
+  renderTeamCheckboxes(cfg.team_member_ids || []);
+  renderTeamList();
+  document.getElementById("cfg_delay_dm").value = r.delay_before_dm_minutes ?? 10;
   document.getElementById("cfg_delay_post").value = r.post_join_delay_seconds ?? 60;
-  document.getElementById("cfg_group_name").value = r.group_name_template || "";
+  document.getElementById("cfg_group_name").value = r.group_name_template || "{date} - {time} - {lead_name} - ({budget_rank})";
   document.getElementById("cfg_dm").value = r.dm_text || "";
   document.getElementById("cfg_post").value = r.post_join_text || "";
   document.getElementById("cfg_audio").value = r.post_join_audio_url || "";
+  document.getElementById("cfg_promote").checked = r.promote_team_to_admin !== false;
   document.getElementById("cfg_enabled").checked = r.enabled !== false;
   setTimeout(() => {
     document.getElementById("cfg_instance").value = r.instance_id || "";
-    document.getElementById("cfg_closer").value = r.closer_id || "";
-  }, 50);
+  }, 30);
   const url = `${location.origin}/api/hooks/booking/${r.webhook_token}`;
   document.getElementById("webhookUrl").textContent = url;
   loadEvents();
 }
 
-function renderInstances(rows) {
+function renderAdminSelect() {
   const sel = document.getElementById("cfg_instance");
-  sel.innerHTML = '<option value="">— elegí un chip —</option>' +
-    rows.map(r => `<option value="${r.id}">${esc(r.name)} (${r.status})</option>`).join("");
+  sel.innerHTML = '<option value="">— elegí el admin chip —</option>' +
+    instances.map(i => `<option value="${i.id}">${esc(i.name)} (${i.status})</option>`).join("");
 }
 
-function renderClosers(rows) {
-  const sel = document.getElementById("cfg_closer");
-  sel.innerHTML = '<option value="">— elegí un closer —</option>' +
-    rows.filter(r => r.active).map(r => `<option value="${r.id}">${esc(r.name)} (${r.phone})</option>`).join("");
+function renderCreatorsCheckboxes(selectedIds) {
+  const box = document.getElementById("cfg_creators_box");
+  if (!instances.length) { box.innerHTML = '<span class="muted">No tenés chips conectados todavía.</span>'; return; }
+  box.innerHTML = instances.map(i => {
+    const on = selectedIds.includes(i.id);
+    return `<label class="checkbox-pill ${on ? "on" : ""}">
+      <input type="checkbox" value="${i.id}" ${on ? "checked" : ""} onchange="this.parentElement.classList.toggle('on', this.checked)" />
+      ${esc(i.name)} <span style="color:#888;">(${i.status})</span>
+    </label>`;
+  }).join("");
+}
 
-  const list = document.getElementById("closersList");
-  if (!rows.length) {
-    list.textContent = "Sin closers todavía. Agregá al menos uno.";
-    return;
-  }
-  list.innerHTML = rows.map(r => `
-    <div class="closer-row" data-id="${r.id}">
-      <input value="${esc(r.name)}" data-k="name" />
-      <input value="${esc(r.phone)}" data-k="phone" placeholder="5491127167024" />
-      <label style="color:#888;font-size:12px;">
-        <input type="checkbox" data-k="active" ${r.active ? "checked" : ""} /> Activo
+function renderTeamCheckboxes(selectedIds) {
+  const box = document.getElementById("cfg_team_box");
+  const active = teamMembers.filter(t => t.active);
+  if (!active.length) { box.innerHTML = '<span class="muted">No tenés team members. Agregá arriba.</span>'; return; }
+  box.innerHTML = active.map(t => {
+    const on = selectedIds.includes(t.id);
+    return `<label class="checkbox-pill ${on ? "on" : ""}">
+      <input type="checkbox" value="${t.id}" ${on ? "checked" : ""} onchange="this.parentElement.classList.toggle('on', this.checked)" />
+      ${esc(t.name)} <span class="role-badge ${t.role}" style="margin-left:4px;">${t.role}</span>
+    </label>`;
+  }).join("");
+}
+
+function renderTeamList() {
+  const list = document.getElementById("teamList");
+  if (!teamMembers.length) { list.textContent = "Sin team members. Agregá al menos a Tomi (owner), Carlos (closer) y el triager."; return; }
+  list.innerHTML = teamMembers.map(t => `
+    <div class="member-row" data-id="${t.id}">
+      <input value="${esc(t.name)}" data-k="name" />
+      <input value="${esc(t.phone)}" data-k="phone" placeholder="5491127167024" />
+      <select data-k="role">
+        ${["owner","closer","triager","other"].map(r => `<option value="${r}" ${t.role===r?"selected":""}>${r}</option>`).join("")}
+      </select>
+      <label style="color:#888;font-size:12px;text-align:center;">
+        <input type="checkbox" data-k="active" ${t.active ? "checked" : ""} /> Activo
       </label>
-      <button onclick="saveCloser(${r.id})">💾</button>
-      <button class="danger" onclick="delCloser(${r.id})">🗑</button>
+      <button onclick="saveMember(${t.id})">💾</button>
+      <button class="danger" onclick="delMember(${t.id})">🗑</button>
     </div>
   `).join("");
 }
 
-async function addCloser() {
-  const name = prompt("Nombre del closer (ej: Carlos):");
+async function addMember() {
+  const name = prompt("Nombre (ej: Tomi, Carlos, etc):");
   if (!name) return;
-  const phone = prompt("Teléfono (con código país, sin +). Ej: 5491127167024");
+  const phone = prompt("Teléfono con código país, sin +. Ej: 5491127167024");
   if (!phone) return;
+  const role = prompt("Rol: owner / closer / triager / other", "closer");
+  if (!role) return;
   const r = await fetch("/api/closers", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, phone })
+    body: JSON.stringify({ name, phone, role })
   });
   if (!r.ok) { alert((await r.json()).error); return; }
   loadAll();
 }
 
-async function saveCloser(id) {
-  const row = document.querySelector(`.closer-row[data-id="${id}"]`);
-  const name = row.querySelector('[data-k="name"]').value.trim();
-  const phone = row.querySelector('[data-k="phone"]').value.trim();
-  const active = row.querySelector('[data-k="active"]').checked;
+async function saveMember(id) {
+  const row = document.querySelector(`.member-row[data-id="${id}"]`);
+  const body = {
+    name: row.querySelector('[data-k="name"]').value.trim(),
+    phone: row.querySelector('[data-k="phone"]').value.trim(),
+    role: row.querySelector('[data-k="role"]').value,
+    active: row.querySelector('[data-k="active"]').checked,
+  };
   const r = await fetch(`/api/closers/${id}`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, phone, active })
+    body: JSON.stringify(body)
   });
   if (!r.ok) { alert((await r.json()).error); return; }
   loadAll();
 }
 
-async function delCloser(id) {
-  if (!confirm("¿Eliminar este closer?")) return;
+async function delMember(id) {
+  if (!confirm("¿Eliminar?")) return;
   await fetch(`/api/closers/${id}`, { method: "DELETE" });
   loadAll();
 }
 
+function collectChecked(boxId) {
+  return Array.from(document.querySelectorAll(`#${boxId} input[type=checkbox]:checked`))
+    .map(c => parseInt(c.value, 10));
+}
+
 async function saveCfg() {
   const msg = document.getElementById("cfgMsg");
+  msg.style.color = "#ff7070";
   msg.textContent = "";
   const body = {
     instance_id: document.getElementById("cfg_instance").value || null,
-    closer_id: document.getElementById("cfg_closer").value || null,
-    delay_before_dm_minutes: parseInt(document.getElementById("cfg_delay_dm").value || "5", 10),
+    group_creator_instance_ids: collectChecked("cfg_creators_box"),
+    team_member_ids: collectChecked("cfg_team_box"),
+    delay_before_dm_minutes: parseInt(document.getElementById("cfg_delay_dm").value || "10", 10),
     post_join_delay_seconds: parseInt(document.getElementById("cfg_delay_post").value || "60", 10),
     group_name_template: document.getElementById("cfg_group_name").value,
     dm_text: document.getElementById("cfg_dm").value,
     post_join_text: document.getElementById("cfg_post").value,
     post_join_audio_url: document.getElementById("cfg_audio").value || null,
+    promote_team_to_admin: document.getElementById("cfg_promote").checked,
     enabled: document.getElementById("cfg_enabled").checked,
   };
   const r = await fetch("/api/booking-config", {
@@ -234,13 +309,13 @@ async function saveCfg() {
 }
 
 function copyWebhook() {
-  const url = document.getElementById("webhookUrl").textContent;
-  navigator.clipboard.writeText(url).then(() => alert("Copiado!"));
+  navigator.clipboard.writeText(document.getElementById("webhookUrl").textContent)
+    .then(() => alert("Copiado!"));
 }
 
 async function regenToken() {
-  if (!confirm("¿Generar un token nuevo? El viejo deja de funcionar inmediatamente.")) return;
-  const r = await fetch("/api/booking-config/regenerate-token", { method: "POST" }).then(r => r.json());
+  if (!confirm("¿Generar token nuevo? El viejo deja de funcionar.")) return;
+  await fetch("/api/booking-config/regenerate-token", { method: "POST" });
   loadAll();
 }
 
@@ -248,33 +323,36 @@ async function testFire() {
   const phone = prompt("Tu número (con código país, sin +). Ej: 5491136109797");
   if (!phone) return;
   const name = prompt("Nombre del lead de prueba:", "Test Lead");
+  const rank = prompt("Budget rank (1-4):", "1");
   const r = await fetch("/api/booking-config/test-fire", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone, name })
+    body: JSON.stringify({ phone, name, budget_rank: parseInt(rank || "0", 10) || null })
   });
   const j = await r.json();
   if (!r.ok) { alert("Error: " + j.error); return; }
-  alert(`OK booking ${j.booking_id}. En ${j.dm_in_minutes} minutos recibís el DM. Cuando entres al grupo, esperá los seg configurados y va a aparecer el welcome.`);
+  alert(`OK booking ${j.booking_id}. En ${j.dm_in_minutes} min recibís el DM.`);
   loadEvents();
 }
 
 async function loadEvents() {
   const rows = await fetch("/api/booking-config/events").then(r => r.json());
   const list = document.getElementById("eventsList");
-  if (!rows.length) { list.textContent = "Sin bookings todavía. Probá el botón Test."; return; }
+  if (!rows.length) { list.textContent = "Sin bookings todavía."; return; }
   list.innerHTML = rows.map(r => `
     <div class="event-row">
       <span class="event-status ${r.status}">${r.status}</span>
       <div>
-        <div><strong>${esc(r.lead_name || r.lead_phone)}</strong> · ${esc(r.lead_phone)}</div>
+        <div><strong>${esc(r.lead_name || r.lead_phone)}</strong>
+          ${r.budget_rank ? ` <span class="rank-tag">(${r.budget_rank})</span>` : ""}
+          · ${esc(r.lead_phone)}</div>
         <div style="color:#888;font-size:11px;">
           ${r.scheduled_at ? "Call: " + new Date(r.scheduled_at).toLocaleString("es-AR") : ""}
-          ${r.closer_name ? " · Closer: " + esc(r.closer_name) : ""}
+          ${r.instance_name ? " · Creator: " + esc(r.instance_name) : ""}
           ${r.error_message ? " · ⚠ " + esc(r.error_message).slice(0, 80) : ""}
         </div>
       </div>
       <span style="color:#888;font-size:11px;">${new Date(r.created_at).toLocaleString("es-AR")}</span>
-      <span>${r.invite_url ? `<a href="${esc(r.invite_url)}" target="_blank">link grupo ↗</a>` : ""}</span>
+      <span>${r.invite_url ? `<a href="${esc(r.invite_url)}" target="_blank">grupo ↗</a>` : ""}</span>
     </div>
   `).join("");
 }

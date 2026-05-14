@@ -30,13 +30,15 @@ router.get("/", async (req, res) => {
 
 router.put("/", async (req, res) => {
   const {
-    instance_id, closer_id,
+    instance_id,                       // chip captación / admin (DM sender)
+    group_creator_instance_ids = [],   // pool de 3 chips que crean grupos (round-robin)
+    team_member_ids = [],              // ids de la tabla closers (= equipo) a agregar al grupo
     delay_before_dm_minutes, post_join_delay_seconds,
     group_name_template, dm_text, post_join_text, post_join_audio_url,
+    promote_team_to_admin = true,
     timezone, enabled,
   } = req.body || {};
 
-  // Asegurar que existe
   await exec(
     `INSERT INTO booking_config (user_id, webhook_token)
      VALUES ($1, $2)
@@ -44,38 +46,56 @@ router.put("/", async (req, res) => {
     [req.user.id, crypto.randomBytes(24).toString("hex")]
   );
 
-  // Validar pertenencia
+  // Validar pertenencia: admin chip
   if (instance_id) {
     const ok = await queryOne(`SELECT id FROM instances WHERE id = $1 AND user_id = $2`, [instance_id, req.user.id]);
-    if (!ok) return res.status(400).json({ error: "Chip inválido" });
+    if (!ok) return res.status(400).json({ error: "Admin chip inválido" });
   }
-  if (closer_id) {
-    const ok = await queryOne(`SELECT id FROM closers WHERE id = $1 AND user_id = $2`, [closer_id, req.user.id]);
-    if (!ok) return res.status(400).json({ error: "Closer inválido" });
+  // Validar pool de group-creators
+  const creatorIds = Array.isArray(group_creator_instance_ids) ? group_creator_instance_ids.map(Number).filter(Boolean) : [];
+  if (creatorIds.length > 0) {
+    const owned = await query(
+      `SELECT id FROM instances WHERE user_id = $1 AND id = ANY($2::int[])`,
+      [req.user.id, creatorIds]
+    );
+    if (owned.length !== creatorIds.length) return res.status(400).json({ error: "Algún chip group-creator no es tuyo" });
+  }
+  // Validar team
+  const teamIds = Array.isArray(team_member_ids) ? team_member_ids.map(Number).filter(Boolean) : [];
+  if (teamIds.length > 0) {
+    const owned = await query(
+      `SELECT id FROM closers WHERE user_id = $1 AND id = ANY($2::int[])`,
+      [req.user.id, teamIds]
+    );
+    if (owned.length !== teamIds.length) return res.status(400).json({ error: "Algún team member no es tuyo" });
   }
 
   await exec(
     `UPDATE booking_config SET
        instance_id = $1,
-       closer_id = $2,
-       delay_before_dm_minutes = $3,
-       post_join_delay_seconds = $4,
-       group_name_template = $5,
-       dm_text = $6,
-       post_join_text = $7,
-       post_join_audio_url = $8,
-       timezone = $9,
-       enabled = $10
-     WHERE user_id = $11`,
+       group_creator_instance_ids = $2::jsonb,
+       team_member_ids = $3::jsonb,
+       delay_before_dm_minutes = $4,
+       post_join_delay_seconds = $5,
+       group_name_template = $6,
+       dm_text = $7,
+       post_join_text = $8,
+       post_join_audio_url = $9,
+       promote_team_to_admin = $10,
+       timezone = $11,
+       enabled = $12
+     WHERE user_id = $13`,
     [
       instance_id || null,
-      closer_id || null,
+      JSON.stringify(creatorIds),
+      JSON.stringify(teamIds),
       delay_before_dm_minutes ?? 5,
       post_join_delay_seconds ?? 60,
-      group_name_template || '{date} {time} - Consultoría Smart Acquisition',
+      group_name_template || '{date} - {time} - {lead_name} - ({budget_rank})',
       dm_text || '',
       post_join_text || '',
       post_join_audio_url || null,
+      promote_team_to_admin !== false,
       timezone || 'America/Argentina/Buenos_Aires',
       enabled !== false,
       req.user.id,
@@ -94,13 +114,16 @@ router.post("/regenerate-token", async (req, res) => {
 
 // Trigger manual de prueba (simula webhook GHL)
 router.post("/test-fire", async (req, res) => {
-  const { phone, name, scheduled_at } = req.body || {};
+  const { phone, name, scheduled_at, budget_rank } = req.body || {};
   if (!phone) return res.status(400).json({ error: "phone requerido" });
 
   const cfg = await queryOne(`SELECT * FROM booking_config WHERE user_id = $1`, [req.user.id]);
   if (!cfg) return res.status(400).json({ error: "No hay config de booking" });
-  if (!cfg.instance_id) return res.status(400).json({ error: "No hay chip configurado" });
-  if (!cfg.closer_id) return res.status(400).json({ error: "No hay closer configurado" });
+  if (!cfg.instance_id) return res.status(400).json({ error: "No hay admin chip configurado" });
+  const creators = Array.isArray(cfg.group_creator_instance_ids) ? cfg.group_creator_instance_ids : [];
+  if (!creators.length) return res.status(400).json({ error: "No hay chips group-creator configurados" });
+  const team = Array.isArray(cfg.team_member_ids) ? cfg.team_member_ids : [];
+  if (!team.length) return res.status(400).json({ error: "No hay team members configurados" });
 
   const cleanPhone = String(phone).replace(/[^0-9]/g, "");
   const dt = scheduled_at ? new Date(scheduled_at) : new Date(Date.now() + 24 * 3600 * 1000);
@@ -108,15 +131,15 @@ router.post("/test-fire", async (req, res) => {
   const delayMin = cfg.delay_before_dm_minutes ?? 5;
   const ev = await queryOne(
     `INSERT INTO booking_events
-       (user_id, instance_id, closer_id, lead_phone, lead_name, scheduled_at,
+       (user_id, instance_id, lead_phone, lead_name, scheduled_at, budget_rank,
         status, dm_scheduled_at, raw_webhook_payload)
      VALUES ($1, $2, $3, $4, $5, $6, 'pending',
              NOW() + ($7 || ' minutes')::interval,
              $8)
      RETURNING id`,
     [
-      req.user.id, cfg.instance_id, cfg.closer_id,
-      cleanPhone, name || null, dt,
+      req.user.id, cfg.instance_id,
+      cleanPhone, name || null, dt, budget_rank || null,
       delayMin, JSON.stringify({ _test: true, ...req.body }),
     ]
   );
@@ -127,10 +150,9 @@ router.post("/test-fire", async (req, res) => {
 // Listar bookings recientes (para ver historial)
 router.get("/events", async (req, res) => {
   const rows = await query(
-    `SELECT be.*, c.name AS closer_name, i.name AS instance_name
+    `SELECT be.*, i.name AS instance_name
      FROM booking_events be
-     LEFT JOIN closers c ON c.id = be.closer_id
-     LEFT JOIN instances i ON i.id = be.instance_id
+     LEFT JOIN instances i ON i.id = be.group_creator_instance_id
      WHERE be.user_id = $1
      ORDER BY be.id DESC LIMIT 50`,
     [req.user.id]
