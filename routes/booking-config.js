@@ -36,6 +36,8 @@ router.put("/", async (req, res) => {
     delay_before_dm_minutes, post_join_delay_seconds,
     group_name_template, dm_text, post_join_text, post_join_audio_url,
     contact_name_template,
+    dm_channel,                       // 'callbell' | 'evolution'
+    callbell_channel_uuid,
     promote_team_to_admin = true,
     timezone, enabled,
   } = req.body || {};
@@ -71,6 +73,9 @@ router.put("/", async (req, res) => {
     if (owned.length !== teamIds.length) return res.status(400).json({ error: "Algún team member no es tuyo" });
   }
 
+  const channel = (dm_channel === "evolution" || dm_channel === "callbell")
+    ? dm_channel : "callbell";
+
   await exec(
     `UPDATE booking_config SET
        instance_id = $1,
@@ -85,8 +90,10 @@ router.put("/", async (req, res) => {
        contact_name_template = $10,
        promote_team_to_admin = $11,
        timezone = $12,
-       enabled = $13
-     WHERE user_id = $14`,
+       enabled = $13,
+       dm_channel = $14,
+       callbell_channel_uuid = $15
+     WHERE user_id = $16`,
     [
       instance_id || null,
       JSON.stringify(creatorIds),
@@ -101,6 +108,8 @@ router.put("/", async (req, res) => {
       promote_team_to_admin !== false,
       timezone || 'America/Argentina/Buenos_Aires',
       enabled !== false,
+      channel,
+      callbell_channel_uuid || null,
       req.user.id,
     ]
   );
@@ -122,7 +131,13 @@ router.post("/test-fire", async (req, res) => {
 
   const cfg = await queryOne(`SELECT * FROM booking_config WHERE user_id = $1`, [req.user.id]);
   if (!cfg) return res.status(400).json({ error: "No hay config de booking" });
-  if (!cfg.instance_id) return res.status(400).json({ error: "No hay admin chip configurado" });
+  const channel = cfg.dm_channel || "callbell";
+  if (channel === "evolution" && !cfg.instance_id) {
+    return res.status(400).json({ error: "Canal Evolution: falta admin chip" });
+  }
+  if (channel === "callbell" && !cfg.callbell_channel_uuid) {
+    return res.status(400).json({ error: "Canal Callbell: falta channel UUID" });
+  }
   const creators = Array.isArray(cfg.group_creator_instance_ids) ? cfg.group_creator_instance_ids : [];
   if (!creators.length) return res.status(400).json({ error: "No hay chips group-creator configurados" });
   const team = Array.isArray(cfg.team_member_ids) ? cfg.team_member_ids : [];

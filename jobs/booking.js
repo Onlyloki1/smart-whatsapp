@@ -15,6 +15,7 @@
 const cron = require("node-cron");
 const { query, queryOne, exec, logEvent } = require("../db");
 const evo = require("../lib/evolution");
+const callbell = require("../lib/callbell");
 
 function rand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -58,6 +59,7 @@ async function processPendingDMs() {
   const items = await query(`
     SELECT be.*, bc.group_name_template, bc.dm_text, bc.timezone,
            bc.contact_name_template,
+           bc.dm_channel, bc.callbell_channel_uuid,
            bc.instance_id AS admin_instance_id,
            bc.group_creator_instance_ids, bc.team_member_ids,
            bc.promote_team_to_admin,
@@ -74,12 +76,32 @@ async function processPendingDMs() {
   `);
 
   for (const ev of items) {
-    if (!ev.admin_instance_id || ev.admin_instance_status !== "connected") {
-      await exec(
-        `UPDATE booking_events SET dm_scheduled_at = NOW() + interval '60 seconds' WHERE id = $1`,
-        [ev.id]
-      );
-      continue;
+    const channel = ev.dm_channel || "callbell";
+
+    // Validar que tenemos el medio de envío del DM
+    if (channel === "evolution") {
+      if (!ev.admin_instance_id || ev.admin_instance_status !== "connected") {
+        await exec(
+          `UPDATE booking_events SET dm_scheduled_at = NOW() + interval '60 seconds' WHERE id = $1`,
+          [ev.id]
+        );
+        continue;
+      }
+    } else if (channel === "callbell") {
+      if (!ev.callbell_channel_uuid) {
+        await exec(
+          `UPDATE booking_events SET status = 'failed', error_message = 'callbell_channel_uuid no configurado' WHERE id = $1`,
+          [ev.id]
+        );
+        continue;
+      }
+      if (!process.env.CALLBELL_API_KEY) {
+        await exec(
+          `UPDATE booking_events SET status = 'failed', error_message = 'CALLBELL_API_KEY no en env' WHERE id = $1`,
+          [ev.id]
+        );
+        continue;
+      }
     }
 
     // Claim
@@ -137,40 +159,44 @@ async function processPendingDMs() {
       const inviteUrl = inviteRes?.inviteUrl || (inviteRes?.inviteCode ? `https://chat.whatsapp.com/${inviteRes.inviteCode}` : null);
       if (!inviteUrl) throw new Error("fetchInviteCode no devolvió URL");
 
-      // 7. DM al lead DESDE EL ADMIN CHIP (no el creator)
+      // 7. DM al lead — ruta según canal configurado
       ctx.invite_url = inviteUrl;
       const dmText = renderTpl(ev.dm_text, ctx);
       const cleanLead = String(ev.lead_phone).replace(/[^0-9]/g, "");
+      let dmExternalId = null;
 
-      // 7a. Guardar contacto del lead en la libreta del admin chip
-      // (con el nombre del calendario o template configurado)
-      const contactNameTpl = ev.contact_name_template || "{lead_name}";
-      const contactName = renderTpl(contactNameTpl, ctx).trim();
-      if (contactName && ev.lead_name) {
-        evo.updateContactName(ev.admin_evolution_instance, cleanLead, contactName).catch(()=>{});
-        // Y reflejar en nuestra DB también
+      if (channel === "callbell") {
+        // Vía Callbell: continúa el thread del lead (que vive en Callbell)
+        const res = await callbell.sendText(ev.callbell_channel_uuid, cleanLead, dmText);
+        dmExternalId = res?.message?.uuid || res?.uuid || null;
+      } else {
+        // Vía Evolution admin chip
+        const contactNameTpl = ev.contact_name_template || "{lead_name}";
+        const contactName = renderTpl(contactNameTpl, ctx).trim();
+        if (contactName && ev.lead_name) {
+          evo.updateContactName(ev.admin_evolution_instance, cleanLead, contactName).catch(()=>{});
+          await exec(
+            `UPDATE conversations SET custom_name = $1
+             WHERE instance_id = $2 AND phone = $3`,
+            [contactName, ev.admin_instance_id, cleanLead]
+          );
+        }
+        await evo.sendPresence(ev.admin_evolution_instance, cleanLead, "composing", rand(2000, 4000)).catch(()=>{});
+        const dmRes = await evo.sendText(ev.admin_evolution_instance, cleanLead, dmText);
+        dmExternalId = dmRes?.key?.id || null;
+
         await exec(
-          `UPDATE conversations SET custom_name = $1
+          `INSERT INTO messages_log (user_id, instance_id, phone, direction, text, evolution_msg_id)
+           VALUES ($1, $2, $3, 'out', $4, $5)`,
+          [ev.user_id, ev.admin_instance_id, cleanLead, dmText, dmExternalId]
+        );
+        await exec(
+          `UPDATE conversations
+           SET last_msg_text = $1, last_msg_at = NOW(), last_direction = 'out'
            WHERE instance_id = $2 AND phone = $3`,
-          [contactName, ev.admin_instance_id, cleanLead]
+          [dmText.slice(0, 200), ev.admin_instance_id, cleanLead]
         );
       }
-
-      await evo.sendPresence(ev.admin_evolution_instance, cleanLead, "composing", rand(2000, 4000)).catch(()=>{});
-      const dmRes = await evo.sendText(ev.admin_evolution_instance, cleanLead, dmText);
-
-      // Log + conversation update
-      await exec(
-        `INSERT INTO messages_log (user_id, instance_id, phone, direction, text, evolution_msg_id)
-         VALUES ($1, $2, $3, 'out', $4, $5)`,
-        [ev.user_id, ev.admin_instance_id, cleanLead, dmText, dmRes?.key?.id || null]
-      );
-      await exec(
-        `UPDATE conversations
-         SET last_msg_text = $1, last_msg_at = NOW(), last_direction = 'out'
-         WHERE instance_id = $2 AND phone = $3`,
-        [dmText.slice(0, 200), ev.admin_instance_id, cleanLead]
-      );
 
       // 8. Update booking_event
       await exec(
@@ -186,6 +212,7 @@ async function processPendingDMs() {
       await logEvent(ev.user_id, creator.id, "booking_dm_sent", {
         booking_id: ev.id, lead_phone: cleanLead, group_jid: groupJid,
         group_creator: creator.name, team_count: team.length, budget_rank: ev.budget_rank,
+        dm_channel: channel,
       });
     } catch (err) {
       const errMsg = err.response?.data?.message || err.message || "unknown";

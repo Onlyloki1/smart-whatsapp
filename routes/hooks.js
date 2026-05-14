@@ -93,7 +93,13 @@ router.post("/booking/:token", async (req, res) => {
     );
     if (!cfg) return res.status(401).json({ error: "Token inválido o booking deshabilitado" });
 
-    if (!cfg.instance_id) return res.status(400).json({ error: "No hay admin chip configurado" });
+    const channel = cfg.dm_channel || "callbell";
+    if (channel === "evolution" && !cfg.instance_id) {
+      return res.status(400).json({ error: "Canal Evolution: falta admin chip" });
+    }
+    if (channel === "callbell" && !cfg.callbell_channel_uuid) {
+      return res.status(400).json({ error: "Canal Callbell: falta channel UUID" });
+    }
     const creators = Array.isArray(cfg.group_creator_instance_ids) ? cfg.group_creator_instance_ids : [];
     if (!creators.length) return res.status(400).json({ error: "No hay chips group-creator configurados" });
     const team = Array.isArray(cfg.team_member_ids) ? cfg.team_member_ids : [];

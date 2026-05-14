@@ -15,24 +15,44 @@
     <div id="teamList" class="muted small">Cargando...</div>
   </section>
 
-  <!-- Sección Chips -->
+  <!-- Sección Canal del DM -->
   <section style="margin-top:32px;">
-    <h2 style="font-size:18px;">Asignación de chips</h2>
+    <h2 style="font-size:18px;">Canal del DM al lead</h2>
     <div class="form-grid">
       <label class="full">
-        <span>Admin chip (capta leads + manda el DM con el invite)</span>
-        <select id="cfg_instance"></select>
-        <small class="muted">El chip de Tomi. NO crea grupos — solo manda el mensaje al lead.</small>
+        <span>Cómo se le manda el mensaje con el invite</span>
+        <select id="cfg_dm_channel" onchange="onChannelChange()">
+          <option value="callbell">Callbell API (lead vive en Callbell)</option>
+          <option value="evolution">Evolution admin chip (lead viene chateando con uno de los chips de Smart WhatsApp)</option>
+        </select>
+        <small class="muted">Callbell mantiene la continuidad del thread del lead — es el setup correcto si tus leads entran via Callbell.</small>
       </label>
+      <label class="full" id="row_callbell" style="display:none;">
+        <span>Callbell channel UUID (el número que envía)</span>
+        <input id="cfg_callbell_uuid" placeholder="ej: 7d04d58a-9762-4759-89b6-486a26bb47f8" />
+        <small class="muted">UUID del channel en Callbell que va a mandar el mensaje. <code>CALLBELL_API_KEY</code> se setea como env var en Railway.</small>
+      </label>
+      <label class="full" id="row_admin" style="display:none;">
+        <span>Admin chip Evolution (si elegís Evolution)</span>
+        <select id="cfg_instance"></select>
+        <small class="muted">Chip de Smart WhatsApp que manda el DM. NO crea grupos.</small>
+      </label>
+    </div>
+  </section>
+
+  <!-- Sección Chips -->
+  <section style="margin-top:32px;">
+    <h2 style="font-size:18px;">Chips para crear grupos</h2>
+    <div class="form-grid">
       <label class="full">
         <span>Chips group-creators (rotación round-robin, menos cargado del día primero)</span>
         <div id="cfg_creators_box" class="checkbox-list"></div>
-        <small class="muted">Marcá los 2-3 chips que solo crean grupos. NO deberían ser el mismo que el admin chip.</small>
+        <small class="muted">Marcá los 2-3 chips que SOLO crean grupos. Independiente del canal del DM.</small>
       </label>
       <label class="full">
         <span>Team members que se agregan al grupo</span>
         <div id="cfg_team_box" class="checkbox-list"></div>
-        <small class="muted">Tildá quiénes entran a cada grupo creado.</small>
+        <small class="muted">Tildá quiénes entran a cada grupo creado (van como admin si está activado).</small>
       </label>
     </div>
   </section>
@@ -178,6 +198,9 @@ async function loadAll() {
   renderCreatorsCheckboxes(cfg.group_creator_instance_ids || []);
   renderTeamCheckboxes(cfg.team_member_ids || []);
   renderTeamList();
+  document.getElementById("cfg_dm_channel").value = r.dm_channel || "callbell";
+  document.getElementById("cfg_callbell_uuid").value = r.callbell_channel_uuid || "";
+  onChannelChange();
   document.getElementById("cfg_delay_dm").value = r.delay_before_dm_minutes ?? 10;
   document.getElementById("cfg_delay_post").value = r.post_join_delay_seconds ?? 60;
   document.getElementById("cfg_group_name").value = r.group_name_template || "{date} - {time} - {lead_name} - ({budget_rank})";
@@ -287,6 +310,12 @@ function collectChecked(boxId) {
     .map(c => parseInt(c.value, 10));
 }
 
+function onChannelChange() {
+  const ch = document.getElementById("cfg_dm_channel").value;
+  document.getElementById("row_callbell").style.display = ch === "callbell" ? "flex" : "none";
+  document.getElementById("row_admin").style.display = ch === "evolution" ? "flex" : "none";
+}
+
 async function saveCfg() {
   const msg = document.getElementById("cfgMsg");
   msg.style.color = "#ff7070";
@@ -295,6 +324,8 @@ async function saveCfg() {
     instance_id: document.getElementById("cfg_instance").value || null,
     group_creator_instance_ids: collectChecked("cfg_creators_box"),
     team_member_ids: collectChecked("cfg_team_box"),
+    dm_channel: document.getElementById("cfg_dm_channel").value,
+    callbell_channel_uuid: document.getElementById("cfg_callbell_uuid").value.trim() || null,
     delay_before_dm_minutes: parseInt(document.getElementById("cfg_delay_dm").value || "10", 10),
     post_join_delay_seconds: parseInt(document.getElementById("cfg_delay_post").value || "60", 10),
     group_name_template: document.getElementById("cfg_group_name").value,
