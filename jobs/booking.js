@@ -64,6 +64,7 @@ async function processPendingDMs() {
            bc.group_creator_instance_ids, bc.team_member_ids,
            bc.promote_team_to_admin,
            i.evolution_instance AS admin_evolution_instance,
+           i.phone_number AS admin_phone_number,
            i.status AS admin_instance_status
     FROM booking_events be
     LEFT JOIN booking_config bc ON bc.user_id = be.user_id
@@ -139,18 +140,52 @@ async function processPendingDMs() {
 
       const subject = renderTpl(ev.group_name_template, ctx).slice(0, 90);
 
-      // 4. Crear grupo (creator chip + team members iniciales)
-      const groupRes = await evo.createGroup(creator.evolution_instance, subject, teamPhones);
-      const groupJid = groupRes?.id || groupRes?.groupJid || groupRes?.key?.id;
+      // Si el admin chip es DISTINTO del creator chip, sumarlo al grupo también
+      const adminPhone = String(ev.admin_phone_number || "").replace(/[^0-9]/g, "");
+      const creatorPhone = (() => {
+        // El phone_number del creator lo pedimos aparte si hace falta
+        return null;
+      })();
+      // Sumamos admin phone solo si: 1) está conectado un admin, 2) es distinto del creator
+      const adminIsSeparate = ev.admin_instance_id && ev.admin_instance_id !== creator.id && adminPhone;
+
+      // Phones que tienen que terminar como ADMIN del grupo:
+      // - todos los team members (Tomi, Carlos, Triager)
+      // - admin chip si es separado del creator
+      const phonesToManage = [...teamPhones];
+      if (adminIsSeparate) phonesToManage.push(adminPhone);
+
+      // 4. Crear grupo (el creator chip queda como admin auto)
+      const groupRes = await evo.createGroup(creator.evolution_instance, subject, phonesToManage);
+      const groupJid = groupRes?.id || groupRes?.groupJid || groupRes?.key?.id || groupRes?.data?.id;
       if (!groupJid) throw new Error("createGroup no devolvió group jid: " + JSON.stringify(groupRes).slice(0, 200));
 
-      // 5. Promote team members a admin (si configurado)
-      if (ev.promote_team_to_admin !== false) {
+      // Pequeño delay para que Baileys termine de sincronizar los participants
+      await new Promise(r => setTimeout(r, 1500));
+
+      // 4b. Asegurar que todos están adentro (idempotente: si ya están, ignora)
+      try {
+        await evo.addParticipants(creator.evolution_instance, groupJid, phonesToManage);
+      } catch (e) {
+        // ya estaban, ok
+      }
+
+      // Otro delay
+      await new Promise(r => setTimeout(r, 1500));
+
+      // 5. Promote a admin (si configurado)
+      if (ev.promote_team_to_admin !== false && phonesToManage.length > 0) {
         try {
-          await evo.promoteParticipants(creator.evolution_instance, groupJid, teamPhones);
+          const promoteRes = await evo.promoteParticipants(creator.evolution_instance, groupJid, phonesToManage);
+          await logEvent(ev.user_id, creator.id, "booking_promote_done", {
+            booking_id: ev.id, group_jid: groupJid, phones: phonesToManage,
+            result_sample: JSON.stringify(promoteRes).slice(0, 200),
+          });
         } catch (e) {
-          // No es crítico — los team members quedan como participants si falla
           console.warn("[BOOKING] promote falló:", e.message);
+          await logEvent(ev.user_id, creator.id, "booking_promote_failed", {
+            booking_id: ev.id, error: e.message, phones: phonesToManage,
+          });
         }
       }
 

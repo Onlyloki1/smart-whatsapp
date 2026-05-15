@@ -193,11 +193,17 @@ async function handleIncomingMessage(inst, data) {
 
 // ─── Group participants update (alguien entró o salió de un grupo) ─
 async function handleGroupParticipantsUpdate(inst, data) {
-  // Evolution envía: { id (group jid), participants: [phone], action: "add"|"remove" }
-  const groupJid = data?.id || data?.groupJid || data?.remoteJid;
-  const action = data?.action;
-  const participants = data?.participants || [];
-  if (!groupJid || action !== "add" || !participants.length) return;
+  const groupJid = data?.id || data?.groupJid || data?.remoteJid || data?.key?.remoteJid;
+  const action = String(data?.action || "").toLowerCase();
+  const participants = data?.participants || data?.users || [];
+
+  // Log siempre que entre algo (debug)
+  await logEvent(inst.user_id, inst.id, "evo_group_participants_raw", {
+    groupJid, action, participants_count: participants.length,
+    sample: JSON.stringify(participants).slice(0, 200),
+  });
+
+  if (!groupJid || !["add", "added", "invite", "join", "promote"].includes(action) || !participants.length) return;
 
   // ¿Es un grupo que creamos por una agenda?
   const booking = await queryOne(
@@ -206,18 +212,23 @@ async function handleGroupParticipantsUpdate(inst, data) {
      ORDER BY id DESC LIMIT 1`,
     [groupJid]
   );
-  if (!booking) return;
+  if (!booking) {
+    await logEvent(inst.user_id, inst.id, "booking_join_no_match", { groupJid, action });
+    return;
+  }
 
-  // Normalizar phones: pueden venir como "549...@s.whatsapp.net" o ya pelado
   const cleanedParticipants = participants.map(p =>
     String(p).replace(/@s\.whatsapp\.net$/, "").replace(/@c\.us$/, "").replace(/[^0-9]/g, "")
   );
   const cleanLeadPhone = String(booking.lead_phone).replace(/[^0-9]/g, "");
 
-  // ¿Entró el lead esperado?
-  if (!cleanedParticipants.includes(cleanLeadPhone)) return;
+  if (!cleanedParticipants.includes(cleanLeadPhone)) {
+    await logEvent(inst.user_id, inst.id, "booking_join_lead_not_in_participants", {
+      booking_id: booking.id, expected: cleanLeadPhone, got: cleanedParticipants,
+    });
+    return;
+  }
 
-  // Cargar booking_config para tomar el delay configurable
   const cfg = await queryOne(
     `SELECT post_join_delay_seconds FROM booking_config WHERE user_id = $1`,
     [booking.user_id]
@@ -234,7 +245,7 @@ async function handleGroupParticipantsUpdate(inst, data) {
   );
 
   await logEvent(booking.user_id, booking.instance_id, "booking_lead_joined", {
-    booking_id: booking.id, group_jid: groupJid, phone: cleanLeadPhone,
+    booking_id: booking.id, group_jid: groupJid, phone: cleanLeadPhone, delay_sec: delaySec,
   });
 }
 

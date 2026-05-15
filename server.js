@@ -106,6 +106,34 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message });
 });
 
+// Re-suscribir todos los chips existentes al set completo de eventos
+// (algunos chips se crearon antes de que existiera GROUP_PARTICIPANTS_UPDATE en la lista)
+async function refreshAllWebhooks() {
+  try {
+    const { query } = require("./db");
+    const evo = require("./lib/evolution");
+    const rows = await query(`SELECT id, evolution_instance FROM instances`);
+    const base = process.env.WEBHOOK_BASE_URL || "";
+    const events = [
+      "QRCODE_UPDATED", "CONNECTION_UPDATE", "MESSAGES_UPSERT", "MESSAGES_UPDATE",
+      "SEND_MESSAGE", "CONTACTS_UPSERT", "GROUPS_UPSERT", "GROUP_PARTICIPANTS_UPDATE",
+    ];
+    let ok = 0;
+    for (const r of rows) {
+      const url = `${base}/api/webhook/evolution/${r.evolution_instance}`;
+      try {
+        await evo.setInstanceWebhook(r.evolution_instance, url, events);
+        ok++;
+      } catch (e) {
+        console.warn(`[BOOT] webhook refresh failed for ${r.evolution_instance}: ${e.message}`);
+      }
+    }
+    console.log(`[BOOT] webhook subscriptions refreshed: ${ok}/${rows.length} chips`);
+  } catch (e) {
+    console.error("[BOOT] refreshAllWebhooks err:", e.message);
+  }
+}
+
 async function boot() {
   try {
     await runMigrations();
@@ -124,6 +152,8 @@ async function boot() {
     if (process.env.DISABLE_BOOKING !== "true") {
       booking.start();
     }
+    // Re-subscribe chips on boot (idempotente)
+    setImmediate(() => refreshAllWebhooks());
   });
 }
 
