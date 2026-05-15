@@ -390,7 +390,10 @@ async function loadEvents() {
         </div>
       </div>
       <span style="color:#888;font-size:11px;">${new Date(r.created_at).toLocaleString("es-AR")}</span>
-      <span>${r.invite_url ? `<a href="${esc(r.invite_url)}" target="_blank">grupo ↗</a>` : ""}</span>
+      <span>
+        ${r.invite_url ? `<a href="${esc(r.invite_url)}" target="_blank">grupo ↗</a> · ` : ""}
+        <a href="/api/booking-config/events/${r.id}/trace" target="_blank">trace</a>
+      </span>
     </div>
   `).join("");
 }

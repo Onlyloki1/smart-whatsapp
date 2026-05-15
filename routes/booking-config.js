@@ -178,4 +178,35 @@ router.get("/events", async (req, res) => {
   res.json(rows);
 });
 
+// Debug: ver system_events de un booking específico (para diagnosticar)
+router.get("/events/:id/trace", async (req, res) => {
+  const be = await queryOne(
+    `SELECT * FROM booking_events WHERE id = $1 AND user_id = $2`,
+    [req.params.id, req.user.id]
+  );
+  if (!be) return res.status(404).json({ error: "No encontrado" });
+
+  // Eventos del sistema relacionados a este user en una ventana de tiempo del booking
+  // (desde 1 min antes de created_at hasta ahora)
+  const since = new Date(new Date(be.created_at).getTime() - 60000).toISOString();
+  const sysevents = await query(
+    `SELECT event_type, payload, created_at, instance_id
+     FROM system_events
+     WHERE user_id = $1 AND created_at >= $2
+     ORDER BY created_at ASC LIMIT 200`,
+    [req.user.id, since]
+  );
+  // Filtrar los más relevantes al booking
+  const related = sysevents.filter(e => {
+    if (/booking_/.test(e.event_type)) {
+      if (e.payload?.booking_id && e.payload.booking_id !== be.id) return false;
+      return true;
+    }
+    if (e.event_type === "evo_group_participants_raw") return true;
+    return false;
+  });
+
+  res.json({ booking: be, events: related });
+});
+
 module.exports = router;
