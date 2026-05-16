@@ -15,8 +15,52 @@
     <div id="teamList" class="muted small">Cargando...</div>
   </section>
 
-  <!-- Sección Canal del DM -->
+  <!-- Modo de operación -->
   <section style="margin-top:32px;">
+    <h2 style="font-size:18px;">Modo de operación</h2>
+    <div class="form-grid">
+      <label class="full">
+        <span>Cómo procesar bookings</span>
+        <select id="cfg_mode" onchange="onModeChange()">
+          <option value="full">Flow completo (crea grupo + manda DM con invite)</option>
+          <option value="contact_only">Solo contacto + etiqueta (NO manda mensajes)</option>
+        </select>
+        <small class="muted">
+          <strong>Contact only</strong>: el chip guarda al lead con su nombre real y le aplica la etiqueta del budget (las etiquetas tienen que estar creadas previamente en WhatsApp Business app del chip).
+        </small>
+      </label>
+    </div>
+
+    <div id="contact_only_block" style="margin-top:14px; display:none;">
+      <h3 style="font-size:15px;">Mapeo de etiquetas por budget rank</h3>
+      <p class="muted small">Cuando llega un lead con budget_rank N, se le aplica la etiqueta con el nombre que pongas acá. La etiqueta DEBE existir en la app WhatsApp Business del chip.</p>
+      <div class="form-grid">
+        <label>
+          <span>Rank 1 → etiqueta</span>
+          <input id="lbl_1" placeholder="500 a 990" />
+        </label>
+        <label>
+          <span>Rank 2 → etiqueta</span>
+          <input id="lbl_2" placeholder="1.000 a 2.000" />
+        </label>
+        <label>
+          <span>Rank 3 → etiqueta</span>
+          <input id="lbl_3" placeholder="2.000 a 3.000" />
+        </label>
+        <label>
+          <span>Rank 4 → etiqueta (opcional)</span>
+          <input id="lbl_4" placeholder="" />
+        </label>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+        <button onclick="checkLabels()">Verificar etiquetas existentes</button>
+        <span id="labelsStatus" class="muted small"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Sección Canal del DM -->
+  <section style="margin-top:32px;" id="block_full_flow">
     <h2 style="font-size:18px;">Canal del DM al lead</h2>
     <div class="form-grid">
       <label class="full">
@@ -200,7 +244,14 @@ async function loadAll() {
   renderTeamList();
   document.getElementById("cfg_dm_channel").value = r.dm_channel || "callbell";
   document.getElementById("cfg_callbell_uuid").value = r.callbell_channel_uuid || "";
+  document.getElementById("cfg_mode").value = r.contact_only_mode ? "contact_only" : "full";
+  const lm = r.label_mapping || {};
+  document.getElementById("lbl_1").value = lm["1"] || "";
+  document.getElementById("lbl_2").value = lm["2"] || "";
+  document.getElementById("lbl_3").value = lm["3"] || "";
+  document.getElementById("lbl_4").value = lm["4"] || "";
   onChannelChange();
+  onModeChange();
   document.getElementById("cfg_delay_dm").value = r.delay_before_dm_minutes ?? 10;
   document.getElementById("cfg_delay_post").value = r.post_join_delay_seconds ?? 60;
   document.getElementById("cfg_group_name").value = r.group_name_template || "{date} - {time} - {lead_name} - ({budget_rank})";
@@ -316,6 +367,22 @@ function onChannelChange() {
   document.getElementById("row_admin").style.display = ch === "evolution" ? "flex" : "none";
 }
 
+function onModeChange() {
+  const mode = document.getElementById("cfg_mode").value;
+  document.getElementById("contact_only_block").style.display = mode === "contact_only" ? "block" : "none";
+  document.getElementById("block_full_flow").style.display = mode === "contact_only" ? "none" : "block";
+}
+
+async function checkLabels() {
+  const status = document.getElementById("labelsStatus");
+  status.textContent = "Buscando...";
+  const r = await fetch("/api/booking-config/labels").then(r => r.json());
+  if (r.error) { status.textContent = "⚠ " + r.error; return; }
+  if (!r.labels.length) { status.textContent = "El chip no tiene etiquetas. Creá primero en WA Business app."; return; }
+  const names = r.labels.map(l => `"${l.name || l.label || l.id}"`).join(", ");
+  status.textContent = `${r.labels.length} etiquetas: ${names}`;
+}
+
 async function saveCfg() {
   const msg = document.getElementById("cfgMsg");
   msg.style.color = "#ff7070";
@@ -326,6 +393,13 @@ async function saveCfg() {
     team_member_ids: collectChecked("cfg_team_box"),
     dm_channel: document.getElementById("cfg_dm_channel").value,
     callbell_channel_uuid: document.getElementById("cfg_callbell_uuid").value.trim() || null,
+    contact_only_mode: document.getElementById("cfg_mode").value === "contact_only",
+    label_mapping: {
+      "1": document.getElementById("lbl_1").value.trim(),
+      "2": document.getElementById("lbl_2").value.trim(),
+      "3": document.getElementById("lbl_3").value.trim(),
+      "4": document.getElementById("lbl_4").value.trim(),
+    },
     delay_before_dm_minutes: parseInt(document.getElementById("cfg_delay_dm").value || "10", 10),
     post_join_delay_seconds: parseInt(document.getElementById("cfg_delay_post").value || "60", 10),
     group_name_template: document.getElementById("cfg_group_name").value,

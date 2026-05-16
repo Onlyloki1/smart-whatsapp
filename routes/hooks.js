@@ -3,6 +3,7 @@
 
 const express = require("express");
 const { query, queryOne, exec, logEvent } = require("../db");
+const evo = require("../lib/evolution");
 
 const router = express.Router();
 
@@ -93,6 +94,80 @@ router.post("/booking/:token", async (req, res) => {
     );
     if (!cfg) return res.status(401).json({ error: "Token inválido o booking deshabilitado" });
 
+    const phone = parsePhone(req.body);
+    if (!phone) return res.status(400).json({ error: "phone requerido" });
+
+    const name = parseName(req.body);
+    const budgetRank = parseBudgetRank(req.body);
+    const scheduledRaw = parseScheduledAt(req.body);
+    const scheduledAt = scheduledRaw ? new Date(scheduledRaw) : null;
+    if (scheduledRaw && isNaN(scheduledAt.getTime())) {
+      return res.status(400).json({ error: "scheduled_at inválido" });
+    }
+
+    // ─── MODO 1: contact_only — solo guarda contacto + aplica etiqueta ─────
+    if (cfg.contact_only_mode) {
+      if (!cfg.instance_id) return res.status(400).json({ error: "Falta admin chip para guardar contacto" });
+
+      const inst = await queryOne(
+        `SELECT * FROM instances WHERE id = $1 AND user_id = $2`,
+        [cfg.instance_id, cfg.user_id]
+      );
+      if (!inst || inst.status !== "connected") {
+        return res.status(400).json({ error: "Admin chip no conectado" });
+      }
+
+      const out = { ok: true, mode: "contact_only", phone, name, budget_rank: budgetRank };
+
+      // 1) Guardar contacto con el nombre del calendario
+      try {
+        await evo.updateContactName(inst.evolution_instance, phone, name || phone);
+        out.contact_saved = true;
+      } catch (e) {
+        out.contact_save_error = e.message;
+      }
+
+      // 2) Aplicar etiqueta según budget_rank
+      const labelMap = cfg.label_mapping || {};
+      const labelName = labelMap[String(budgetRank)] || labelMap[budgetRank];
+      if (labelName) {
+        try {
+          const labels = await evo.findLabels(inst.evolution_instance);
+          const found = labels.find(l => String(l?.name || "").trim() === String(labelName).trim());
+          if (!found) {
+            out.label_error = `Etiqueta "${labelName}" no existe en el chip. Creala en WhatsApp Business app primero.`;
+          } else {
+            const labelId = found.id || found.labelId;
+            const remoteJid = `${phone}@s.whatsapp.net`;
+            await evo.handleLabel(inst.evolution_instance, remoteJid, labelId, "add");
+            out.label_applied = labelName;
+          }
+        } catch (e) {
+          out.label_error = e.message;
+        }
+      } else if (budgetRank) {
+        out.label_skipped = `Sin mapeo para rank ${budgetRank}`;
+      }
+
+      // Guardar en booking_events igual (para historial)
+      await exec(
+        `INSERT INTO booking_events
+           (user_id, instance_id, lead_phone, lead_name, scheduled_at, budget_rank,
+            status, raw_webhook_payload, error_message)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          cfg.user_id, cfg.instance_id, phone, name, scheduledAt, budgetRank,
+          out.contact_saved ? "completed" : "failed",
+          JSON.stringify({ ...req.body, _mode: "contact_only" }),
+          out.contact_save_error || out.label_error || null,
+        ]
+      );
+
+      await logEvent(cfg.user_id, cfg.instance_id, "booking_contact_only", out);
+      return res.json(out);
+    }
+
+    // ─── MODO 2: full flow (grupo + DM) — el flujo original ───────────────
     const channel = cfg.dm_channel || "callbell";
     if (channel === "evolution" && !cfg.instance_id) {
       return res.status(400).json({ error: "Canal Evolution: falta admin chip" });
@@ -104,17 +179,6 @@ router.post("/booking/:token", async (req, res) => {
     if (!creators.length) return res.status(400).json({ error: "No hay chips group-creator configurados" });
     const team = Array.isArray(cfg.team_member_ids) ? cfg.team_member_ids : [];
     if (!team.length) return res.status(400).json({ error: "No hay team members configurados" });
-
-    const phone = parsePhone(req.body);
-    if (!phone) return res.status(400).json({ error: "phone requerido" });
-
-    const name = parseName(req.body);
-    const budgetRank = parseBudgetRank(req.body);
-    const scheduledRaw = parseScheduledAt(req.body);
-    const scheduledAt = scheduledRaw ? new Date(scheduledRaw) : null;
-    if (scheduledRaw && isNaN(scheduledAt.getTime())) {
-      return res.status(400).json({ error: "scheduled_at inválido" });
-    }
 
     const delayMin = cfg.delay_before_dm_minutes ?? 5;
 

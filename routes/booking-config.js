@@ -38,6 +38,8 @@ router.put("/", async (req, res) => {
     contact_name_template,
     dm_channel,                       // 'callbell' | 'evolution'
     callbell_channel_uuid,
+    contact_only_mode = false,        // si true: solo guarda contacto + aplica label, no manda mensajes
+    label_mapping,                    // { "1": "500 a 990", "2": "1.000 a 2.000", ... }
     promote_team_to_admin = true,
     timezone, enabled,
   } = req.body || {};
@@ -76,6 +78,17 @@ router.put("/", async (req, res) => {
   const channel = (dm_channel === "evolution" || dm_channel === "callbell")
     ? dm_channel : "callbell";
 
+  const safeLabelMapping = (() => {
+    if (!label_mapping || typeof label_mapping !== "object") return null;
+    const out = {};
+    for (const k of ["1","2","3","4"]) {
+      if (label_mapping[k] != null && String(label_mapping[k]).trim()) {
+        out[k] = String(label_mapping[k]).trim();
+      }
+    }
+    return out;
+  })();
+
   await exec(
     `UPDATE booking_config SET
        instance_id = $1,
@@ -92,8 +105,10 @@ router.put("/", async (req, res) => {
        timezone = $12,
        enabled = $13,
        dm_channel = $14,
-       callbell_channel_uuid = $15
-     WHERE user_id = $16`,
+       callbell_channel_uuid = $15,
+       contact_only_mode = $16,
+       label_mapping = COALESCE($17::jsonb, label_mapping)
+     WHERE user_id = $18`,
     [
       instance_id || null,
       JSON.stringify(creatorIds),
@@ -110,11 +125,29 @@ router.put("/", async (req, res) => {
       enabled !== false,
       channel,
       callbell_channel_uuid || null,
+      !!contact_only_mode,
+      safeLabelMapping ? JSON.stringify(safeLabelMapping) : null,
       req.user.id,
     ]
   );
 
   res.json({ ok: true });
+});
+
+// Endpoint útil: listar labels actuales del admin chip (para verificar que existan)
+router.get("/labels", async (req, res) => {
+  const cfg = await queryOne(`SELECT instance_id FROM booking_config WHERE user_id = $1`, [req.user.id]);
+  if (!cfg?.instance_id) return res.json({ labels: [], error: "No hay admin chip configurado" });
+  const inst = await queryOne(`SELECT * FROM instances WHERE id = $1 AND user_id = $2`, [cfg.instance_id, req.user.id]);
+  if (!inst) return res.json({ labels: [], error: "Admin chip no encontrado" });
+  if (inst.status !== "connected") return res.json({ labels: [], error: `Admin chip status: ${inst.status}` });
+  try {
+    const evo = require("../lib/evolution");
+    const labels = await evo.findLabels(inst.evolution_instance);
+    res.json({ labels });
+  } catch (e) {
+    res.json({ labels: [], error: e.message });
+  }
 });
 
 // Regenerar webhook token
@@ -131,6 +164,54 @@ router.post("/test-fire", async (req, res) => {
 
   const cfg = await queryOne(`SELECT * FROM booking_config WHERE user_id = $1`, [req.user.id]);
   if (!cfg) return res.status(400).json({ error: "No hay config de booking" });
+
+  const cleanPhone = String(phone).replace(/[^0-9]/g, "");
+  const dt = scheduled_at ? new Date(scheduled_at) : new Date(Date.now() + 24 * 3600 * 1000);
+
+  // ─── MODO contact_only ───────────────────────────────
+  if (cfg.contact_only_mode) {
+    if (!cfg.instance_id) return res.status(400).json({ error: "Falta admin chip" });
+    const inst = await queryOne(`SELECT * FROM instances WHERE id = $1 AND user_id = $2`, [cfg.instance_id, req.user.id]);
+    if (!inst || inst.status !== "connected") return res.status(400).json({ error: "Admin chip no conectado" });
+
+    const evo = require("../lib/evolution");
+    const out = { ok: true, mode: "contact_only", phone: cleanPhone, name, budget_rank: budget_rank || null };
+
+    try {
+      await evo.updateContactName(inst.evolution_instance, cleanPhone, name || cleanPhone);
+      out.contact_saved = true;
+    } catch (e) { out.contact_save_error = e.message; }
+
+    const labelMap = cfg.label_mapping || {};
+    const labelName = labelMap[String(budget_rank)] || labelMap[budget_rank];
+    if (labelName) {
+      try {
+        const labels = await evo.findLabels(inst.evolution_instance);
+        const found = labels.find(l => String(l?.name || "").trim() === String(labelName).trim());
+        if (!found) out.label_error = `Etiqueta "${labelName}" no existe — creala en WA Business app del chip`;
+        else {
+          await evo.handleLabel(inst.evolution_instance, `${cleanPhone}@s.whatsapp.net`, found.id || found.labelId, "add");
+          out.label_applied = labelName;
+        }
+      } catch (e) { out.label_error = e.message; }
+    }
+
+    await exec(
+      `INSERT INTO booking_events
+         (user_id, instance_id, lead_phone, lead_name, scheduled_at, budget_rank,
+          status, raw_webhook_payload, error_message)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        req.user.id, cfg.instance_id, cleanPhone, name || null, dt, budget_rank || null,
+        out.contact_saved ? "completed" : "failed",
+        JSON.stringify({ _test: true, ...req.body, _mode: "contact_only" }),
+        out.contact_save_error || out.label_error || null,
+      ]
+    );
+    return res.json(out);
+  }
+
+  // ─── MODO full flow ──────────────────────────────────
   const channel = cfg.dm_channel || "callbell";
   if (channel === "evolution" && !cfg.instance_id) {
     return res.status(400).json({ error: "Canal Evolution: falta admin chip" });
@@ -142,9 +223,6 @@ router.post("/test-fire", async (req, res) => {
   if (!creators.length) return res.status(400).json({ error: "No hay chips group-creator configurados" });
   const team = Array.isArray(cfg.team_member_ids) ? cfg.team_member_ids : [];
   if (!team.length) return res.status(400).json({ error: "No hay team members configurados" });
-
-  const cleanPhone = String(phone).replace(/[^0-9]/g, "");
-  const dt = scheduled_at ? new Date(scheduled_at) : new Date(Date.now() + 24 * 3600 * 1000);
 
   const delayMin = cfg.delay_before_dm_minutes ?? 5;
   const ev = await queryOne(
