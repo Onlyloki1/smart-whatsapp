@@ -4,6 +4,7 @@
 const express = require("express");
 const { query, queryOne, exec, logEvent } = require("../db");
 const evo = require("../lib/evolution");
+const { processContactOnly } = require("../lib/booking-helpers");
 
 const router = express.Router();
 
@@ -105,7 +106,7 @@ router.post("/booking/:token", async (req, res) => {
       return res.status(400).json({ error: "scheduled_at inválido" });
     }
 
-    // ─── MODO 1: contact_only — solo guarda contacto + aplica etiqueta ─────
+    // ─── MODO 1: contact_only — solo guarda contacto + aplica etiquetas ─────
     if (cfg.contact_only_mode) {
       if (!cfg.instance_id) return res.status(400).json({ error: "Falta admin chip para guardar contacto" });
 
@@ -117,39 +118,14 @@ router.post("/booking/:token", async (req, res) => {
         return res.status(400).json({ error: "Admin chip no conectado" });
       }
 
-      const out = { ok: true, mode: "contact_only", phone, name, budget_rank: budgetRank };
+      const out = await processContactOnly({
+        cfg, instance: inst,
+        phone, name,
+        scheduledAt, budgetRank,
+      });
 
-      // 1) Guardar contacto con el nombre del calendario
-      try {
-        await evo.updateContactName(inst.evolution_instance, phone, name || phone);
-        out.contact_saved = true;
-      } catch (e) {
-        out.contact_save_error = e.message;
-      }
-
-      // 2) Aplicar etiqueta según budget_rank
-      const labelMap = cfg.label_mapping || {};
-      const labelName = labelMap[String(budgetRank)] || labelMap[budgetRank];
-      if (labelName) {
-        try {
-          const labels = await evo.findLabels(inst.evolution_instance);
-          const found = labels.find(l => String(l?.name || "").trim() === String(labelName).trim());
-          if (!found) {
-            out.label_error = `Etiqueta "${labelName}" no existe en el chip. Creala en WhatsApp Business app primero.`;
-          } else {
-            const labelId = found.id || found.labelId;
-            const remoteJid = `${phone}@s.whatsapp.net`;
-            await evo.handleLabel(inst.evolution_instance, remoteJid, labelId, "add");
-            out.label_applied = labelName;
-          }
-        } catch (e) {
-          out.label_error = e.message;
-        }
-      } else if (budgetRank) {
-        out.label_skipped = `Sin mapeo para rank ${budgetRank}`;
-      }
-
-      // Guardar en booking_events igual (para historial)
+      // Guardar en booking_events para historial
+      const errSummary = out.contact_save_error || out.label_error || out.hour_label_error || null;
       await exec(
         `INSERT INTO booking_events
            (user_id, instance_id, lead_phone, lead_name, scheduled_at, budget_rank,
@@ -159,7 +135,7 @@ router.post("/booking/:token", async (req, res) => {
           cfg.user_id, cfg.instance_id, phone, name, scheduledAt, budgetRank,
           out.contact_saved ? "completed" : "failed",
           JSON.stringify({ ...req.body, _mode: "contact_only" }),
-          out.contact_save_error || out.label_error || null,
+          errSummary,
         ]
       );
 

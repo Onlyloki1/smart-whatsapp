@@ -174,27 +174,12 @@ router.post("/test-fire", async (req, res) => {
     const inst = await queryOne(`SELECT * FROM instances WHERE id = $1 AND user_id = $2`, [cfg.instance_id, req.user.id]);
     if (!inst || inst.status !== "connected") return res.status(400).json({ error: "Admin chip no conectado" });
 
-    const evo = require("../lib/evolution");
-    const out = { ok: true, mode: "contact_only", phone: cleanPhone, name, budget_rank: budget_rank || null };
-
-    try {
-      await evo.updateContactName(inst.evolution_instance, cleanPhone, name || cleanPhone);
-      out.contact_saved = true;
-    } catch (e) { out.contact_save_error = e.message; }
-
-    const labelMap = cfg.label_mapping || {};
-    const labelName = labelMap[String(budget_rank)] || labelMap[budget_rank];
-    if (labelName) {
-      try {
-        const labels = await evo.findLabels(inst.evolution_instance);
-        const found = labels.find(l => String(l?.name || "").trim() === String(labelName).trim());
-        if (!found) out.label_error = `Etiqueta "${labelName}" no existe — creala en WA Business app del chip`;
-        else {
-          await evo.handleLabel(inst.evolution_instance, `${cleanPhone}@s.whatsapp.net`, found.id || found.labelId, "add");
-          out.label_applied = labelName;
-        }
-      } catch (e) { out.label_error = e.message; }
-    }
+    const { processContactOnly } = require("../lib/booking-helpers");
+    const out = await processContactOnly({
+      cfg, instance: inst,
+      phone: cleanPhone, name,
+      scheduledAt: dt, budgetRank: budget_rank || null,
+    });
 
     await exec(
       `INSERT INTO booking_events
@@ -205,7 +190,7 @@ router.post("/test-fire", async (req, res) => {
         req.user.id, cfg.instance_id, cleanPhone, name || null, dt, budget_rank || null,
         out.contact_saved ? "completed" : "failed",
         JSON.stringify({ _test: true, ...req.body, _mode: "contact_only" }),
-        out.contact_save_error || out.label_error || null,
+        out.contact_save_error || out.label_error || out.hour_label_error || null,
       ]
     );
     return res.json(out);

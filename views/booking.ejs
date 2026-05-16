@@ -34,6 +34,7 @@
     <div id="contact_only_block" style="margin-top:14px; display:none;">
       <h3 style="font-size:15px;">Mapeo de etiquetas por budget rank</h3>
       <p class="muted small">Cuando llega un lead con budget_rank N, se le aplica la etiqueta con el nombre que pongas acá. La etiqueta DEBE existir en la app WhatsApp Business del chip.</p>
+      <p class="muted small">📌 <strong>Etiqueta de hora automática</strong>: además del budget, se aplica la etiqueta de la hora según <code>scheduled_at</code> del webhook. Convención: 10-12 → "10 AM"/"11 AM"/"12 AM"; 13-21 → "13 PM"/.../"21 PM". Si la hora cae fuera de ese rango, no se aplica etiqueta.</p>
       <div class="form-grid">
         <label>
           <span>Rank 1 → etiqueta</span>
@@ -436,13 +437,39 @@ async function testFire() {
   if (!phone) return;
   const name = prompt("Nombre del lead de prueba:", "Test Lead");
   const rank = prompt("Budget rank (1-4):", "1");
+  // Hora para etiqueta de hora — default 13 PM (test razonable)
+  const hour = prompt("Hora de la agenda (10-21, para la etiqueta de hora):", "13");
+  let scheduled_at = null;
+  const h = parseInt(hour || "0", 10);
+  if (h >= 0 && h <= 23) {
+    const d = new Date();
+    d.setHours(h, 0, 0, 0);
+    scheduled_at = d.toISOString();
+  }
   const r = await fetch("/api/booking-config/test-fire", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone, name, budget_rank: parseInt(rank || "0", 10) || null })
+    body: JSON.stringify({
+      phone, name,
+      budget_rank: parseInt(rank || "0", 10) || null,
+      scheduled_at,
+    })
   });
   const j = await r.json();
   if (!r.ok) { alert("Error: " + j.error); return; }
-  alert(`OK booking ${j.booking_id}. En ${j.dm_in_minutes} min recibís el DM.`);
+  // Show detailed result
+  const lines = [];
+  lines.push(`OK booking creado.`);
+  if (j.mode === "contact_only") {
+    lines.push(`Modo: solo contacto + etiqueta`);
+    lines.push(`Contacto guardado: ${j.contact_saved ? "sí" : "NO " + (j.contact_save_error||"")}`);
+    if (j.label_applied) lines.push(`✓ Etiqueta budget: "${j.label_applied}"`);
+    if (j.label_error) lines.push(`⚠ Budget: ${j.label_error}`);
+    if (j.hour_label_applied) lines.push(`✓ Etiqueta hora: "${j.hour_label_applied}"`);
+    if (j.hour_label_error) lines.push(`⚠ Hora: ${j.hour_label_error}`);
+  } else {
+    lines.push(`En ${j.dm_in_minutes} min recibís el DM.`);
+  }
+  alert(lines.join("\n"));
   loadEvents();
 }
 
