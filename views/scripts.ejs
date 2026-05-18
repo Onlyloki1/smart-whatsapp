@@ -1,0 +1,311 @@
+<%- include("partials/header", { title: "Scripts - Smart WhatsApp" }) %>
+<%- include("partials/nav", { active: "scripts" }) %>
+
+<main class="container wide">
+  <div class="row-between">
+    <div>
+      <h1>Scripts rápidos</h1>
+      <p class="muted small">Templates con steps (texto / audio / imagen / delay / etiqueta) que disparás desde la inbox con 1 click.</p>
+    </div>
+    <button class="btn primary" onclick="newScript()">+ Nuevo script</button>
+  </div>
+
+  <div id="empty" class="muted" style="margin-top:24px; display:none;">Sin scripts. Creá el primero.</div>
+  <div id="list" class="grid"></div>
+
+  <div id="editor" class="modal hidden">
+    <div class="editor-card">
+      <div class="row-between">
+        <h2 id="editTitle">Nuevo script</h2>
+        <button onclick="closeEditor()">✕</button>
+      </div>
+      <div class="form-grid">
+        <label class="full">
+          <span>Nombre del script</span>
+          <input id="f_name" placeholder="Ej: Apertura post-agenda" />
+        </label>
+        <label class="full">
+          <span>Descripción (opcional)</span>
+          <input id="f_desc" placeholder="Para qué momento se usa" />
+        </label>
+        <label class="checkbox">
+          <input id="f_enabled" type="checkbox" checked /> Activado
+        </label>
+      </div>
+
+      <h3 style="margin-top:24px;">Steps</h3>
+      <p class="muted small">Cada step tiene un delay (segundos a esperar ANTES de ejecutarlo). Total = suma de delays.</p>
+      <div id="steps"></div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:6px;">
+        <button onclick="addStep('text')">+ Texto</button>
+        <button onclick="addStep('audio')">+ Audio</button>
+        <button onclick="addStep('image')">+ Imagen</button>
+        <button onclick="addStep('video')">+ Video</button>
+        <button onclick="addStep('delay')">+ Pausa</button>
+        <button onclick="addStep('tag')">+ Etiqueta</button>
+      </div>
+
+      <div class="row-between" style="margin-top:24px;">
+        <span class="muted small" id="totalTime"></span>
+        <div class="row" style="gap:8px;">
+          <button onclick="closeEditor()">Cancelar</button>
+          <button class="primary" onclick="saveScript()">Guardar</button>
+        </div>
+      </div>
+      <p id="editErr" class="err"></p>
+    </div>
+  </div>
+</main>
+
+<style>
+.container.wide { max-width: 1100px; }
+.editor-card {
+  background: #15151a; border: 1px solid #2a2a30; border-radius: 10px;
+  padding: 24px; max-width: 760px; width: 100%; max-height: 92vh; overflow-y: auto;
+}
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; margin-top: 12px; }
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #aaa; }
+.form-grid input, .form-grid select, .form-grid textarea {
+  background: #0e0e10; border: 1px solid #2a2a30; color: #fff;
+  padding: 8px 11px; border-radius: 6px; font-size: 14px; font-family: inherit;
+}
+.form-grid label.full { grid-column: 1 / -1; }
+.form-grid label.checkbox { flex-direction: row; align-items: center; gap: 8px; }
+
+.step {
+  background: #1a1a20; border: 1px solid #2a2a30; border-radius: 8px;
+  padding: 12px; margin-top: 8px;
+}
+.step .step-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.step .step-head .badge {
+  background: #6c5ce7; color: #fff; font-size: 10px; padding: 2px 8px; border-radius: 999px;
+  text-transform: uppercase; font-weight: 600;
+}
+.step .step-head .badge.tag { background: #134e26; }
+.step .step-head .badge.delay { background: #4e3613; }
+.step .step-head .badge.audio { background: #3a1a4e; }
+.step .step-head .idx { color: #888; font-size: 13px; }
+.step .step-head .grow { flex: 1; }
+.step .step-grid { display: grid; grid-template-columns: 100px 1fr; gap: 10px 14px; }
+.step .step-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #888; }
+.step .step-grid label.full { grid-column: 1 / -1; }
+.step input, .step textarea, .step select {
+  background: #0e0e10; border: 1px solid #2a2a30; color: #fff;
+  padding: 6px 9px; border-radius: 5px; font-size: 13px; font-family: inherit;
+}
+.step textarea { min-height: 60px; resize: vertical; }
+.step .step-actions { display: flex; gap: 6px; }
+.step .step-actions button { padding: 4px 8px; font-size: 11px; }
+
+.card .meta { color: #888; font-size: 12px; margin-top: 4px; }
+.toggle-on { color: #6dd66d; }
+.toggle-off { color: #888; }
+</style>
+
+<script>
+let currentId = null;
+let stepsState = [];
+
+function esc(s){ return String(s||"").replace(/[<>&"']/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"})[c]); }
+
+async function loadList() {
+  const rows = await fetch("/api/quick-scripts").then(r => r.json());
+  document.getElementById("empty").style.display = rows.length ? "none" : "block";
+  document.getElementById("list").innerHTML = rows.map(r => `
+    <div class="card">
+      <div class="row-between">
+        <h3 style="color:#fff;font-size:15px;margin:0;">${esc(r.name)}</h3>
+        <span class="${r.enabled ? "toggle-on" : "toggle-off"}">${r.enabled ? "● Activo" : "○ Off"}</span>
+      </div>
+      ${r.description ? `<p class="muted small" style="margin:4px 0;">${esc(r.description)}</p>` : ""}
+      <div class="meta">${r.step_count} steps</div>
+      <div class="actions">
+        <button onclick="editScript(${r.id})">Editar</button>
+        <button onclick="toggleScript(${r.id})">${r.enabled ? "Pausar" : "Activar"}</button>
+        <button class="danger" onclick="delScript(${r.id})">Eliminar</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function newScript() {
+  currentId = null;
+  document.getElementById("editTitle").textContent = "Nuevo script";
+  document.getElementById("f_name").value = "";
+  document.getElementById("f_desc").value = "";
+  document.getElementById("f_enabled").checked = true;
+  document.getElementById("editErr").textContent = "";
+  stepsState = [
+    { step_type: "text", text_content: "Hola! Soy Juan", delay_seconds: 5 },
+  ];
+  renderSteps();
+  document.getElementById("editor").classList.remove("hidden");
+}
+
+async function editScript(id) {
+  currentId = id;
+  document.getElementById("editTitle").textContent = "Editar script";
+  document.getElementById("editErr").textContent = "";
+  const r = await fetch(`/api/quick-scripts/${id}`).then(r => r.json());
+  document.getElementById("f_name").value = r.name;
+  document.getElementById("f_desc").value = r.description || "";
+  document.getElementById("f_enabled").checked = !!r.enabled;
+  stepsState = (r.steps || []).map(s => ({
+    step_type: s.step_type,
+    text_content: s.text_content || "",
+    media_url: s.media_url || "",
+    delay_seconds: s.delay_seconds || 0,
+    show_typing: s.show_typing !== false,
+  }));
+  renderSteps();
+  document.getElementById("editor").classList.remove("hidden");
+}
+
+function addStep(type) {
+  const defaults = {
+    text: { text_content: "", delay_seconds: 8 },
+    audio: { media_url: "", delay_seconds: 15 },
+    image: { media_url: "", text_content: "", delay_seconds: 10 },
+    video: { media_url: "", text_content: "", delay_seconds: 15 },
+    delay: { delay_seconds: 30 },
+    tag: { text_content: "", delay_seconds: 0 },
+  };
+  stepsState.push({ step_type: type, show_typing: true, ...defaults[type] });
+  renderSteps();
+}
+
+function removeStep(i) { stepsState.splice(i, 1); renderSteps(); }
+function moveStep(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= stepsState.length) return;
+  [stepsState[i], stepsState[j]] = [stepsState[j], stepsState[i]];
+  renderSteps();
+}
+
+function renderSteps() {
+  document.getElementById("steps").innerHTML = stepsState.map((s, i) => stepHtml(s, i)).join("");
+  stepsState.forEach((s, i) => bindStep(i));
+  const total = stepsState.reduce((acc, s) => acc + (s.delay_seconds || 0), 0);
+  document.getElementById("totalTime").textContent = `Tiempo total del script: ${total}s (${(total/60).toFixed(1)} min)`;
+}
+
+function stepHtml(s, i) {
+  const t = s.step_type;
+  const isMedia = t === "audio" || t === "image" || t === "video";
+  return `
+    <div class="step" data-i="${i}">
+      <div class="step-head">
+        <span class="badge ${t}">${t}</span>
+        <span class="idx">Step ${i + 1}</span>
+        <span class="grow"></span>
+        <div class="step-actions">
+          <button onclick="moveStep(${i}, -1)">↑</button>
+          <button onclick="moveStep(${i}, 1)">↓</button>
+          <button class="danger" onclick="removeStep(${i})">✕</button>
+        </div>
+      </div>
+      <div class="step-grid">
+        <label>
+          <span>Delay (seg)</span>
+          <input data-k="delay_seconds" type="number" min="0" value="${s.delay_seconds || 0}" />
+        </label>
+        ${t === "text" ? `
+          <label>
+            <span>Texto</span>
+            <textarea data-k="text_content">${esc(s.text_content || "")}</textarea>
+          </label>
+        ` : ""}
+        ${t === "tag" ? `
+          <label>
+            <span>Nombre EXACTO de la etiqueta (debe existir en el chip)</span>
+            <input data-k="text_content" value="${esc(s.text_content || "")}" placeholder="Ej: Nuevo cliente" />
+          </label>
+        ` : ""}
+        ${t === "delay" ? `
+          <label>
+            <span>Solo pausa, sin enviar nada</span>
+            <small class="muted">El delay de arriba es lo que esperás antes del siguiente step</small>
+          </label>
+        ` : ""}
+        ${isMedia ? `
+          <label class="full">
+            <span>URL pública del ${t} (.mp3 / .jpg / .mp4)</span>
+            <input data-k="media_url" value="${esc(s.media_url || "")}" placeholder="https://..." />
+          </label>
+          ${t !== "audio" ? `
+            <label class="full">
+              <span>Caption (opcional)</span>
+              <textarea data-k="text_content">${esc(s.text_content || "")}</textarea>
+            </label>
+          ` : ""}
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function bindStep(i) {
+  const root = document.querySelector(`.step[data-i="${i}"]`);
+  if (!root) return;
+  root.querySelectorAll("[data-k]").forEach(el => {
+    el.addEventListener("input", () => {
+      const k = el.dataset.k;
+      let v = el.type === "checkbox" ? el.checked : el.value;
+      if (k === "delay_seconds") v = parseInt(v || "0", 10);
+      stepsState[i][k] = v;
+      if (k === "delay_seconds") {
+        const total = stepsState.reduce((acc, s) => acc + (s.delay_seconds || 0), 0);
+        document.getElementById("totalTime").textContent = `Tiempo total del script: ${total}s (${(total/60).toFixed(1)} min)`;
+      }
+    });
+  });
+}
+
+function closeEditor() { document.getElementById("editor").classList.add("hidden"); }
+
+async function saveScript() {
+  const err = document.getElementById("editErr");
+  err.textContent = "";
+  const body = {
+    name: document.getElementById("f_name").value.trim(),
+    description: document.getElementById("f_desc").value.trim(),
+    enabled: document.getElementById("f_enabled").checked,
+    steps: stepsState,
+  };
+  if (!body.name) { err.textContent = "Ponele un nombre."; return; }
+  if (!body.steps.length) { err.textContent = "Agregá al menos 1 step."; return; }
+  // validate
+  for (const s of body.steps) {
+    if (s.step_type === "tag" && !s.text_content) { err.textContent = "Step 'tag' sin nombre de etiqueta"; return; }
+    if ((s.step_type === "audio" || s.step_type === "image" || s.step_type === "video") && !s.media_url) {
+      err.textContent = `Step '${s.step_type}' sin URL de media`;
+      return;
+    }
+    if (s.step_type === "text" && !s.text_content) { err.textContent = "Step 'text' vacío"; return; }
+  }
+  const url = currentId ? `/api/quick-scripts/${currentId}` : "/api/quick-scripts";
+  const method = currentId ? "PUT" : "POST";
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) { err.textContent = (await r.json()).error || "Error al guardar"; return; }
+  closeEditor();
+  loadList();
+}
+
+async function toggleScript(id) {
+  const r = await fetch(`/api/quick-scripts/${id}`).then(r => r.json());
+  await fetch(`/api/quick-scripts/${id}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...r, enabled: !r.enabled, steps: r.steps }),
+  });
+  loadList();
+}
+
+async function delScript(id) {
+  if (!confirm("¿Eliminar este script?")) return;
+  await fetch(`/api/quick-scripts/${id}`, { method: "DELETE" });
+  loadList();
+}
+
+loadList();
+</script>
+</body></html>

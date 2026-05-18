@@ -168,4 +168,136 @@ router.delete("/conversations/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+// ─── Dispatch un script a la conversación ──────────────
+// Encola todos los steps del script con scheduled_at calculado según delays.
+router.post("/conversations/:id/dispatch-script", async (req, res) => {
+  const { script_id } = req.body || {};
+  if (!script_id) return res.status(400).json({ error: "script_id requerido" });
+
+  const convo = await queryOne(
+    `SELECT c.*, i.evolution_instance, i.status AS instance_status
+     FROM conversations c JOIN instances i ON i.id = c.instance_id
+     WHERE c.id = $1 AND c.user_id = $2`,
+    [req.params.id, req.user.id]
+  );
+  if (!convo) return res.status(404).json({ error: "Conversación no encontrada" });
+  if (convo.instance_status !== "connected") {
+    return res.status(400).json({ error: "Chip no conectado" });
+  }
+
+  const script = await queryOne(
+    `SELECT * FROM quick_scripts WHERE id = $1 AND user_id = $2 AND enabled = TRUE`,
+    [script_id, req.user.id]
+  );
+  if (!script) return res.status(404).json({ error: "Script no encontrado o desactivado" });
+
+  const { dispatchScript } = require("../jobs/inbox-dispatcher");
+  const count = await dispatchScript({
+    userId: req.user.id,
+    instanceId: convo.instance_id,
+    conversationId: convo.id,
+    phone: convo.phone,
+    scriptId: script.id,
+  });
+
+  // Marcar takeover (humano dispatched = takeover)
+  await exec(
+    `UPDATE conversations
+     SET human_takeover = TRUE, human_takeover_at = COALESCE(human_takeover_at, NOW())
+     WHERE id = $1`,
+    [convo.id]
+  );
+  // Cancelar autoresponder pendiente
+  await exec(
+    `UPDATE auto_responder_queue SET status = 'cancelled'
+     WHERE status = 'pending' AND instance_id = $1 AND phone = $2`,
+    [convo.instance_id, convo.phone]
+  );
+
+  res.json({ ok: true, steps_enqueued: count, script: script.name });
+});
+
+// ─── Labels (etiquetas WA Business de una conversación) ────────
+// GET: lista de labels actuales de la conversación
+router.get("/conversations/:id/labels", async (req, res) => {
+  const convo = await queryOne(`SELECT id FROM conversations WHERE id = $1 AND user_id = $2`, [req.params.id, req.user.id]);
+  if (!convo) return res.status(404).json({ error: "No encontrada" });
+  const rows = await query(
+    `SELECT label_id, label_name, applied_at FROM conversation_labels WHERE conversation_id = $1 ORDER BY applied_at DESC`,
+    [convo.id]
+  );
+  res.json(rows);
+});
+
+// POST: aplicar una label (matchea por nombre en Evolution)
+router.post("/conversations/:id/labels", async (req, res) => {
+  const { label_name } = req.body || {};
+  if (!label_name) return res.status(400).json({ error: "label_name requerido" });
+
+  const convo = await queryOne(
+    `SELECT c.*, i.evolution_instance, i.status AS instance_status
+     FROM conversations c JOIN instances i ON i.id = c.instance_id
+     WHERE c.id = $1 AND c.user_id = $2`,
+    [req.params.id, req.user.id]
+  );
+  if (!convo) return res.status(404).json({ error: "Conversación no encontrada" });
+  if (convo.instance_status !== "connected") return res.status(400).json({ error: "Chip no conectado" });
+
+  try {
+    const labels = await evo.findLabels(convo.evolution_instance);
+    const wanted = String(label_name).trim();
+    const found = labels.find(l => String(l?.name || "").trim() === wanted);
+    if (!found) return res.status(404).json({ error: `Etiqueta "${wanted}" no existe en el chip` });
+    const labelId = found.id || found.labelId;
+    const remoteJid = `${convo.phone}@s.whatsapp.net`;
+    await evo.handleLabel(convo.evolution_instance, remoteJid, labelId, "add");
+    await exec(
+      `INSERT INTO conversation_labels (conversation_id, label_id, label_name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (conversation_id, label_id) DO NOTHING`,
+      [convo.id, String(labelId), wanted]
+    );
+    res.json({ ok: true, label_id: labelId, label_name: wanted });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE: quitar label
+router.delete("/conversations/:id/labels/:labelId", async (req, res) => {
+  const convo = await queryOne(
+    `SELECT c.*, i.evolution_instance, i.status AS instance_status
+     FROM conversations c JOIN instances i ON i.id = c.instance_id
+     WHERE c.id = $1 AND c.user_id = $2`,
+    [req.params.id, req.user.id]
+  );
+  if (!convo) return res.status(404).json({ error: "Conversación no encontrada" });
+  if (convo.instance_status !== "connected") return res.status(400).json({ error: "Chip no conectado" });
+
+  try {
+    const remoteJid = `${convo.phone}@s.whatsapp.net`;
+    await evo.handleLabel(convo.evolution_instance, remoteJid, req.params.labelId, "remove");
+    await exec(
+      `DELETE FROM conversation_labels WHERE conversation_id = $1 AND label_id = $2`,
+      [convo.id, req.params.labelId]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Listar labels disponibles del chip (para el dropdown)
+router.get("/instances/:id/labels", async (req, res) => {
+  const inst = await queryOne(`SELECT * FROM instances WHERE id = $1 AND user_id = $2`, [req.params.id, req.user.id]);
+  if (!inst) return res.status(404).json({ error: "No encontrada" });
+  if (inst.status !== "connected") return res.json({ labels: [], error: "Chip no conectado" });
+  try {
+    const labels = await evo.findLabels(inst.evolution_instance);
+    res.json({ labels });
+  } catch (e) {
+    res.json({ labels: [], error: e.message });
+  }
+});
+
 module.exports = router;

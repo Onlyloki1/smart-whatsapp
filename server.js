@@ -15,9 +15,11 @@ const inboxRoutes = require("./routes/inbox");
 const closersRoutes = require("./routes/closers");
 const bookingConfigRoutes = require("./routes/booking-config");
 const hooksRoutes = require("./routes/hooks");
+const quickScriptsRoutes = require("./routes/quick-scripts");
 const sender = require("./jobs/sender");
 const autoresponder = require("./jobs/autoresponder");
 const booking = require("./jobs/booking");
+const inboxDispatcher = require("./jobs/inbox-dispatcher");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -50,6 +52,7 @@ app.use("/api/autoresponders", autoresponderRoutes);
 app.use("/api/inbox", inboxRoutes);
 app.use("/api/closers", closersRoutes);
 app.use("/api/booking-config", bookingConfigRoutes);
+app.use("/api/quick-scripts", quickScriptsRoutes);
 app.use("/api/hooks", hooksRoutes); // hooks públicos (GHL/Calendly) — sin auth
 app.use("/api/stats", require("./routes/stats"));
 app.use("/api/webhook", webhookRoutes); // webhook Evolution — sin auth
@@ -94,6 +97,10 @@ app.get("/booking", authMiddleware, (req, res) => {
   res.render("booking", { user: req.user });
 });
 
+app.get("/scripts", authMiddleware, (req, res) => {
+  res.render("scripts", { user: req.user });
+});
+
 // ─── 404 ───────────────────────────────────────────────
 app.use((req, res) => {
   if (req.accepts("html")) return res.status(404).render("404");
@@ -129,6 +136,9 @@ async function boot() {
     }
     if (process.env.DISABLE_BOOKING !== "true") {
       booking.start();
+    }
+    if (process.env.DISABLE_INBOX_DISPATCHER !== "true") {
+      inboxDispatcher.start();
     }
   });
 }

@@ -25,16 +25,18 @@
     </div>
     <div id="convoView" class="hidden">
       <header class="convo-head">
-        <div>
+        <div style="min-width:0;flex:1;">
           <h3 id="convoName">—</h3>
           <p class="muted small"><span id="convoPhone"></span> · <span id="convoChip"></span></p>
+          <div id="convoLabels" class="convo-labels"></div>
         </div>
         <div class="convo-actions">
+          <button onclick="openLabelPicker()" title="Agregar etiqueta">🏷 + Etiqueta</button>
           <div id="takeoverBox" class="takeover-box hidden">
-            <span class="badge-warn">🤖 Autoresponder desactivado para este chat</span>
-            <button onclick="releaseTakeover()">Reactivar bot</button>
+            <span class="badge-warn">🤖 Bot off</span>
+            <button onclick="releaseTakeover()">Reactivar</button>
           </div>
-          <button class="danger" onclick="deleteChat()" title="Borra mensajes + resetea cooldown del autoresponder">🗑 Borrar chat</button>
+          <button class="danger" onclick="deleteChat()" title="Borra mensajes + resetea cooldown">🗑</button>
         </div>
       </header>
       <div id="messages" class="messages"></div>
@@ -45,15 +47,72 @@
       <p id="sendErr" class="err"></p>
     </div>
   </section>
+
+  <!-- Right sidebar: scripts -->
+  <aside class="scripts-sidebar">
+    <div class="scripts-head">
+      <h3>⚡ Scripts</h3>
+      <a href="/scripts" target="_blank" title="Gestionar scripts">⚙</a>
+    </div>
+    <div id="scriptsList" class="scripts-list"></div>
+  </aside>
 </main>
+
+<!-- Modal de label picker -->
+<div id="labelModal" class="modal hidden">
+  <div class="modal-card" style="max-width:480px;">
+    <div class="row-between" style="margin-bottom:14px;">
+      <h2 style="margin:0;font-size:16px;">Etiquetas del chip</h2>
+      <button onclick="closeLabelPicker()">✕</button>
+    </div>
+    <p class="muted small">Tildá las que querés aplicar a este chat. Las que ya tiene aplicadas vienen marcadas.</p>
+    <div id="labelOptions" style="margin-top:12px;display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow-y:auto;"></div>
+    <div style="margin-top:14px;display:flex;justify-content:flex-end;">
+      <button onclick="closeLabelPicker()">Cerrar</button>
+    </div>
+  </div>
+</div>
 
 <style>
 .inbox-wrap {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 320px 1fr 280px;
   height: calc(100vh - 56px);
   background: #0e0e10;
 }
+
+/* Scripts sidebar */
+.scripts-sidebar { border-left: 1px solid #2a2a30; display: flex; flex-direction: column; min-height: 0; }
+.scripts-head { padding: 12px 14px; border-bottom: 1px solid #2a2a30; display: flex; justify-content: space-between; align-items: center; }
+.scripts-head h3 { margin: 0; font-size: 14px; color: #fff; }
+.scripts-head a { color: #888; font-size: 16px; text-decoration: none; }
+.scripts-head a:hover { color: #fff; }
+.scripts-list { flex: 1; overflow-y: auto; padding: 8px; }
+.script-item {
+  padding: 10px 12px; background: #15151a; border: 1px solid #2a2a30; border-radius: 6px;
+  margin-bottom: 6px; cursor: pointer; transition: background 0.1s;
+}
+.script-item:hover { background: #1c1c24; border-color: #6c5ce7; }
+.script-item .name { font-weight: 600; color: #fff; font-size: 13px; }
+.script-item .desc { color: #888; font-size: 11px; margin-top: 2px; }
+.script-item .meta { color: #6c5ce7; font-size: 11px; margin-top: 4px; }
+
+.convo-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.label-pill {
+  background: #2e2052; color: #c5b8ff; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; display: inline-flex; align-items: center; gap: 4px;
+}
+.label-pill .x { cursor: pointer; opacity: 0.5; padding: 0 2px; }
+.label-pill .x:hover { opacity: 1; }
+
+.label-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: #15151a; border: 1px solid #2a2a30; border-radius: 6px;
+  cursor: pointer; font-size: 13px;
+}
+.label-row:hover { background: #1c1c24; }
+.label-row.applied { background: #2e2052; border-color: #6c5ce7; }
+.label-row input { width: 14px; height: 14px; }
 
 /* Chats sidebar */
 .chats { border-right: 1px solid #2a2a30; display: flex; flex-direction: column; min-height: 0; }
@@ -186,12 +245,14 @@ async function loadChats() {
 
 async function openChat(id) {
   activeConvoId = id;
+  activeInstanceId = null;
   document.getElementById("convoEmpty").classList.add("hidden");
   document.getElementById("convoView").classList.remove("hidden");
   document.getElementById("sendErr").textContent = "";
 
   const data = await fetch(`/api/inbox/conversations/${id}/messages`).then(r => r.json());
   const c = data.conversation;
+  activeInstanceId = c.instance_id;
   document.getElementById("convoName").textContent = c.custom_name || c.contact_name || c.phone;
   document.getElementById("convoPhone").textContent = c.phone + (c.contact_name && c.custom_name ? ` · ${c.contact_name}` : "");
   document.getElementById("convoChip").textContent = c.instance_name + (c.instance_phone ? ` (${c.instance_phone})` : "");
@@ -201,7 +262,105 @@ async function openChat(id) {
   else tk.classList.add("hidden");
 
   renderMessages(data.messages);
+  loadLabels();
   loadChats(); // refresh unread count
+}
+
+let activeInstanceId = null;
+
+// ─── Labels en el header ─────────────────────────
+async function loadLabels() {
+  if (!activeConvoId) return;
+  const rows = await fetch(`/api/inbox/conversations/${activeConvoId}/labels`).then(r => r.json());
+  const box = document.getElementById("convoLabels");
+  if (!Array.isArray(rows) || !rows.length) { box.innerHTML = ""; return; }
+  box.innerHTML = rows.map(l => `
+    <span class="label-pill">
+      ${escape(l.label_name)}
+      <span class="x" onclick="removeLabel('${esc(l.label_id)}', event)" title="Quitar">✕</span>
+    </span>
+  `).join("");
+}
+
+function esc(s){ return String(s||"").replace(/'/g,"\\'"); }
+
+async function removeLabel(labelId, ev) {
+  ev?.stopPropagation();
+  if (!activeConvoId) return;
+  await fetch(`/api/inbox/conversations/${activeConvoId}/labels/${encodeURIComponent(labelId)}`, { method: "DELETE" });
+  loadLabels();
+}
+
+async function openLabelPicker() {
+  if (!activeConvoId || !activeInstanceId) return;
+  const box = document.getElementById("labelOptions");
+  box.innerHTML = '<span class="muted small">Cargando...</span>';
+  document.getElementById("labelModal").classList.remove("hidden");
+  const [allRes, appliedRows] = await Promise.all([
+    fetch(`/api/inbox/instances/${activeInstanceId}/labels`).then(r => r.json()),
+    fetch(`/api/inbox/conversations/${activeConvoId}/labels`).then(r => r.json()),
+  ]);
+  if (allRes.error || !allRes.labels?.length) {
+    box.innerHTML = `<span class="muted small">${allRes.error || "Sin etiquetas en el chip"}</span>`;
+    return;
+  }
+  const appliedIds = new Set(appliedRows.map(l => String(l.label_id)));
+  box.innerHTML = allRes.labels.map(l => {
+    const id = l.id || l.labelId;
+    const name = l.name || l.label || id;
+    const on = appliedIds.has(String(id));
+    return `<label class="label-row ${on ? "applied" : ""}">
+      <input type="checkbox" ${on ? "checked" : ""} onchange="toggleLabel('${esc(name)}', '${esc(id)}', this.checked)" />
+      ${escape(name)}
+    </label>`;
+  }).join("");
+}
+
+function closeLabelPicker() {
+  document.getElementById("labelModal").classList.add("hidden");
+}
+
+async function toggleLabel(name, labelId, on) {
+  if (!activeConvoId) return;
+  if (on) {
+    await fetch(`/api/inbox/conversations/${activeConvoId}/labels`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label_name: name }),
+    });
+  } else {
+    await fetch(`/api/inbox/conversations/${activeConvoId}/labels/${encodeURIComponent(labelId)}`, { method: "DELETE" });
+  }
+  loadLabels();
+}
+
+// ─── Scripts sidebar ─────────────────────────────
+async function loadScripts() {
+  const rows = await fetch("/api/quick-scripts").then(r => r.json()).catch(() => []);
+  const list = document.getElementById("scriptsList");
+  const active = (rows || []).filter(r => r.enabled);
+  if (!active.length) {
+    list.innerHTML = '<p class="muted small" style="padding:14px;text-align:center;">Sin scripts. <a href="/scripts" target="_blank">Crear uno</a></p>';
+    return;
+  }
+  list.innerHTML = active.map(r => `
+    <div class="script-item" onclick="dispatchScript(${r.id}, ${JSON.stringify(esc(r.name))})">
+      <div class="name">⚡ ${escape(r.name)}</div>
+      ${r.description ? `<div class="desc">${escape(r.description)}</div>` : ""}
+      <div class="meta">${r.step_count} steps</div>
+    </div>
+  `).join("");
+}
+
+async function dispatchScript(scriptId, scriptName) {
+  if (!activeConvoId) { alert("Elegí una conversación primero"); return; }
+  if (!confirm(`¿Disparar el script "${scriptName}" a este chat?`)) return;
+  const r = await fetch(`/api/inbox/conversations/${activeConvoId}/dispatch-script`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ script_id: scriptId }),
+  });
+  const j = await r.json();
+  if (!r.ok) { alert("Error: " + (j.error || "")); return; }
+  alert(`OK. ${j.steps_enqueued} steps encolados. Van saliendo con sus delays.`);
 }
 
 function renderMessages(msgs) {
@@ -285,6 +444,7 @@ function startPolling() {
 
 loadInstances();
 loadChats();
+loadScripts();
 startPolling();
 </script>
 
