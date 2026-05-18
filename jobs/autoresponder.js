@@ -329,64 +329,17 @@ async function tick() {
   }
 }
 
-// ─── Cron: sustained "composing" durante delay ─────────────────────
-// Para cada chip que tiene items por enviar en los próximos 60s,
-// manda un burst de "composing" para que el lead vea que estás escribiendo
-// (en lugar de ver el chip offline 30s y de repente un mensaje).
-async function presenceKeepalive() {
-  const upcoming = await query(`
-    SELECT DISTINCT i.evolution_instance, q.phone
-    FROM auto_responder_queue q
-    JOIN instances i ON i.id = q.instance_id
-    WHERE q.status = 'pending'
-      AND q.scheduled_at > NOW()
-      AND q.scheduled_at <= NOW() + interval '60 seconds'
-      AND i.status = 'connected'
-    LIMIT 30
-  `);
-
-  for (const u of upcoming) {
-    const burstMs = rand(2500, 5500);
-    await evo.sendPresence(u.evolution_instance, u.phone, "composing", burstMs).catch(() => {});
-  }
-}
-
-// ─── Cron: random "available" pulse ────────────────────────────────
-// Cada chip conectado emite "available" 1-2 veces por hora durante horario
-// hábil. Simula que el dueño abre WhatsApp casual.
-async function randomOnlinePulse() {
-  // Solo durante horario hábil (9-22 ARG hardcoded; el AR-level es por autoresponder)
-  if (!isWithinHours(9, 22, "America/Argentina/Buenos_Aires")) return;
-
-  const chips = await query(
-    `SELECT id, evolution_instance FROM instances WHERE status = 'connected'`
-  );
-  for (const c of chips) {
-    // 30% probabilidad por tick (cada 20 min) → ~ 1 pulse cada 60 min promedio
-    if (Math.random() > 0.30) continue;
-    // No tenemos un "target phone" para "available" general — Evolution requiere number.
-    // Workaround: presence "available" hacia un chat existente random (último contacto).
-    const lastChat = await queryOne(
-      `SELECT phone FROM conversations
-       WHERE instance_id = $1 AND last_msg_at > NOW() - interval '7 days'
-       ORDER BY last_msg_at DESC LIMIT 1`,
-      [c.id]
-    );
-    if (!lastChat) continue;
-    await evo.sendPresence(c.evolution_instance, lastChat.phone, "available", rand(3000, 8000)).catch(() => {});
-  }
-}
+// NOTA: removidos por riesgo de ban — los crons `presenceKeepalive` y
+// `randomOnlinePulse` simulaban comportamiento humano (mandar "composing"
+// sostenido, "available" random) llamando a Evolution → Baileys → WhatsApp
+// constantemente. Eso es exactamente el patrón de fingerprint que WhatsApp
+// usa para detectar bots. El burst único de "composing" justo antes de
+// enviar (dentro de tick()) es suficiente y natural.
 
 function start() {
-  console.log("[AUTORESPONDER] Worker iniciado (tick:5s, presence:6s, online-pulse:20min)");
+  console.log("[AUTORESPONDER] Worker iniciado (tick:5s)");
   cron.schedule("*/5 * * * * *", () => {
     tick().catch((err) => console.error("[AUTORESPONDER ERR]", err.message));
-  });
-  cron.schedule("*/6 * * * * *", () => {
-    presenceKeepalive().catch((err) => console.error("[PRESENCE ERR]", err.message));
-  });
-  cron.schedule("*/20 * * * *", () => {
-    randomOnlinePulse().catch((err) => console.error("[ONLINE-PULSE ERR]", err.message));
   });
 }
 
