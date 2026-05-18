@@ -11,6 +11,13 @@ const evo = require("../lib/evolution");
 
 function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
+function pickText(item) {
+  // Random pick si hay text_variants array; sino fallback al text_content legacy
+  const variants = Array.isArray(item.text_variants) ? item.text_variants.filter(Boolean) : [];
+  if (variants.length > 0) return variants[rand(0, variants.length - 1)];
+  return item.text_content || "";
+}
+
 async function tick() {
   const items = await query(`
     SELECT q.*, i.evolution_instance, i.status AS instance_status
@@ -47,16 +54,19 @@ async function tick() {
     try {
       let result = null;
 
+      // Pick text/caption variant random
+      const renderedText = pickText(item);
+
       if (item.step_type === "text") {
         // Mini typing presence
         await evo.sendPresence(item.evolution_instance, cleanPhone, "composing", rand(1500, 3500)).catch(()=>{});
-        result = await evo.sendText(item.evolution_instance, cleanPhone, item.text_content || "");
+        result = await evo.sendText(item.evolution_instance, cleanPhone, renderedText);
       } else if (item.step_type === "audio") {
         await evo.sendPresence(item.evolution_instance, cleanPhone, "recording", rand(1500, 3500)).catch(()=>{});
         result = await evo.sendWhatsAppAudio(item.evolution_instance, cleanPhone, item.media_url);
       } else if (item.step_type === "image" || item.step_type === "video") {
         result = await evo.sendMedia(item.evolution_instance, cleanPhone, item.step_type, item.media_url, {
-          caption: item.text_content || undefined,
+          caption: renderedText || undefined,
         });
       } else if (item.step_type === "tag") {
         // text_content = label name; resolvemos label_id desde Evolution
@@ -93,7 +103,7 @@ async function tick() {
            VALUES ($1, $2, $3, 'out', $4, $5, $6, $7)`,
           [
             item.user_id, item.instance_id, cleanPhone,
-            item.text_content || null,
+            renderedText || null,
             item.step_type === "text" ? null : item.media_url,
             item.step_type === "text" ? null : item.step_type,
             result?.key?.id || null,
@@ -101,8 +111,8 @@ async function tick() {
         );
         if (item.conversation_id) {
           const preview = item.step_type === "text"
-            ? (item.text_content || "").slice(0, 200)
-            : `[${item.step_type}]${item.text_content ? " " + item.text_content.slice(0, 150) : ""}`;
+            ? (renderedText || "").slice(0, 200)
+            : `[${item.step_type}]${renderedText ? " " + renderedText.slice(0, 150) : ""}`;
           await exec(
             `UPDATE conversations
              SET last_msg_text = $1, last_msg_at = NOW(), last_direction = 'out',
@@ -136,6 +146,8 @@ async function tick() {
 
 // API: dispara un script a una conversation.
 // Enquea todos los steps con scheduled_at calculado según los delays.
+// Para text/captions, picka una variante random AL MOMENTO DEL ENVÍO (no al encolar)
+// — así si tenés 1 script disparado varias veces, cada uno saca distinto.
 async function dispatchScript({ userId, instanceId, conversationId, phone, scriptId }) {
   const steps = await query(
     `SELECT * FROM quick_script_steps
@@ -150,6 +162,14 @@ async function dispatchScript({ userId, instanceId, conversationId, phone, scrip
   for (const s of steps) {
     cumulative += Math.max(0, s.delay_seconds || 0);
     if (s.step_type === "delay") continue; // delay sólo agrega tiempo, no se manda nada
+
+    // Pickear variante AHORA y guardarla — así cada disparo del mismo script
+    // saca un texto random distinto sin necesidad de cambiar el schema de la queue
+    const variants = Array.isArray(s.text_variants) ? s.text_variants.filter(Boolean) : [];
+    const pickedText = variants.length > 0
+      ? variants[rand(0, variants.length - 1)]
+      : (s.text_content || null);
+
     await exec(
       `INSERT INTO inbox_dispatch_queue
          (user_id, instance_id, conversation_id, phone, script_id, step_id,
@@ -158,7 +178,7 @@ async function dispatchScript({ userId, instanceId, conversationId, phone, scrip
                NOW() + ($10 || ' seconds')::interval)`,
       [
         userId, instanceId, conversationId, phone, scriptId, s.id,
-        s.step_type, s.text_content || null, s.media_url || null,
+        s.step_type, pickedText, s.media_url || null,
         cumulative,
       ]
     );

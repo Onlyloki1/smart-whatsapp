@@ -7,17 +7,33 @@ router.use(authMiddleware);
 
 const VALID_TYPES = ["text", "audio", "image", "video", "delay", "tag"];
 
+function normalizeVariants(input, fallback) {
+  let arr = [];
+  if (Array.isArray(input)) arr = input;
+  else if (typeof input === "string") arr = input.split("\n");
+  arr = arr.map(s => String(s || "").trim()).filter(Boolean);
+  if (arr.length === 0 && fallback) arr = [String(fallback).trim()].filter(Boolean);
+  return arr;
+}
+
 async function insertSteps(scriptId, steps) {
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     if (!VALID_TYPES.includes(s.step_type)) continue;
+
+    // Variantes (solo aplica a text + captions de media)
+    const variants = normalizeVariants(s.text_variants, s.text_content);
+    const legacyText = variants[0] || null;
+
     await exec(
       `INSERT INTO quick_script_steps
-         (script_id, order_idx, step_type, text_content, media_url, delay_seconds, show_typing)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (script_id, order_idx, step_type, text_content, text_variants,
+          media_url, delay_seconds, show_typing)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
       [
         scriptId, i, s.step_type,
-        s.text_content || null,
+        legacyText,
+        JSON.stringify(variants),
         s.media_url || null,
         Math.max(0, parseInt(s.delay_seconds || 0, 10) || 0),
         s.show_typing !== false,

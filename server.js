@@ -53,6 +53,7 @@ app.use("/api/inbox", inboxRoutes);
 app.use("/api/closers", closersRoutes);
 app.use("/api/booking-config", bookingConfigRoutes);
 app.use("/api/quick-scripts", quickScriptsRoutes);
+app.use("/api/uploads", require("./routes/uploads"));
 app.use("/api/hooks", hooksRoutes); // hooks públicos (GHL/Calendly) — sin auth
 app.use("/api/stats", require("./routes/stats"));
 app.use("/api/webhook", webhookRoutes); // webhook Evolution — sin auth
